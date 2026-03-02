@@ -509,18 +509,42 @@ def find_best_client_match(shipper_name, clients_config, threshold=0.45):
     return None, None, 0
 
 
-def get_client_info(shipper_name, clients_config):
+def get_client_info(shipper_name, clients_config, csv_siret=None):
     """
     Récupère les informations d'un client avec matching intelligent.
 
-    - Match exact
-    - Match insensible à la casse
-    - Match normalisé (sans accents, ponctuation, formes juridiques)
-    - Match par similarité (typos, abréviations)
+    PRIORITÉ:
+    1. Match par SIRET (100% exact) - si SIRET fourni dans le CSV
+    2. Match exact par nom
+    3. Match insensible à la casse
+    4. Match normalisé (sans accents, ponctuation, formes juridiques)
+    5. Match par similarité (typos, abréviations)
 
     IMPORTANT: Ne crée PAS de doublons - utilise le nom original du client existant.
     """
-    # Essayer le matching intelligent d'abord (dans le cache local)
+    # 1. PRIORITÉ: Matching par SIRET (100% exact)
+    if csv_siret:
+        # Nettoyer le SIRET (garder uniquement les chiffres)
+        clean_siret = ''.join(c for c in str(csv_siret) if c.isdigit())
+        if len(clean_siret) >= 9:  # SIREN minimum 9 chiffres, SIRET 14
+            # Chercher dans le cache local
+            for client_name, client_data in clients_config.items():
+                client_siret = ''.join(c for c in str(client_data.get('siret', '')) if c.isdigit())
+                if client_siret and client_siret == clean_siret:
+                    print(f"✓ Client SIRET match: '{shipper_name}' → '{client_name}' (SIRET: {clean_siret})")
+                    return client_data
+
+            # Chercher dans MongoDB
+            all_db_clients = {doc['_id']: doc for doc in clients_collection.find()}
+            for db_name, db_client in all_db_clients.items():
+                db_siret = ''.join(c for c in str(db_client.get('siret', '')) if c.isdigit())
+                if db_siret and db_siret == clean_siret:
+                    db_client.pop('_id', None)
+                    clients_config[db_name] = db_client
+                    print(f"✓ Client DB SIRET match: '{shipper_name}' → '{db_name}' (SIRET: {clean_siret})")
+                    return db_client
+
+    # 2. Essayer le matching intelligent par nom (dans le cache local)
     matched_name, client_info, score = find_best_client_match(shipper_name, clients_config)
 
     if client_info:
@@ -2005,7 +2029,9 @@ def upload_csv():
         # Préparer le résumé
         shippers_summary = []
         for shipper_name, rows in data_by_shipper.items():
-            client_info = get_client_info(shipper_name, clients_config)
+            # Récupérer le SIRET du CSV (s'il existe) - PRIORITÉ pour le matching
+            csv_siret = rows[0].get('SIRET', '') if rows else ''
+            client_info = get_client_info(shipper_name, clients_config, csv_siret=csv_siret)
 
             # Calculer le total estimé
             total_ht = sum(
@@ -2068,7 +2094,9 @@ def refresh_preview(file_id):
         # Préparer le résumé
         shippers_summary = []
         for shipper_name, rows in data_by_shipper.items():
-            client_info = get_client_info(shipper_name, clients_config)
+            # Récupérer le SIRET du CSV (s'il existe) - PRIORITÉ pour le matching
+            csv_siret = rows[0].get('SIRET', '') if rows else ''
+            client_info = get_client_info(shipper_name, clients_config, csv_siret=csv_siret)
 
             # Calculer le total estimé
             total_ht = sum(
@@ -2143,7 +2171,9 @@ def generate_invoices():
             if selected_shippers and shipper_name not in selected_shippers:
                 continue
 
-            client_info = get_client_info(shipper_name, clients_config)
+            # Récupérer le SIRET du CSV (s'il existe) - PRIORITÉ pour le matching
+            csv_siret = rows[0].get('SIRET', '') if rows else ''
+            client_info = get_client_info(shipper_name, clients_config, csv_siret=csv_siret)
             invoice_number = generate_invoice_number(prefix, sequence=invoice_num)
 
             # Extraire la période depuis les données

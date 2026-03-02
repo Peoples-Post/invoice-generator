@@ -137,6 +137,8 @@ COLUMN_MAPPINGS = {
     'shipper': ['Shipper', 'ShipperName', 'SipperName', 'Sipper', 'Client', 'Expéditeur',
                 'Expediteur', 'CustomerName', 'Customer', 'Nom Client', 'NomClient',
                 'Société', 'Societe', 'Company', 'Account', 'Compte'],
+    'siret': ['SIRET', 'Siret', 'N° SIRET', 'Numero SIRET', 'NumeroSIRET', 'SIREN',
+              'Siret Client', 'Client SIRET', 'SIRET Client'],
     'carrier': ['Carrier name or Supplement', 'Carrier', 'Transporteur', 'CarrierName'],
     'method': ['PP Shipping method', 'Shipping method', 'Method', 'Méthode', 'Service'],
     'weight': ['Weight range', 'Weight', 'Poids', 'Tranche'],
@@ -181,6 +183,7 @@ def normalize_row(row, column_mapping):
     # Ajoute les clés standards mappées vers les valeurs
     standard_to_original = {
         'shipper': 'Shipper',
+        'siret': 'SIRET',
         'carrier': 'Carrier name or Supplement',
         'method': 'PP Shipping method',
         'weight': 'Weight range',
