@@ -8,6 +8,8 @@ Author: Peoples Post Team
 
 import os
 import sys
+import csv
+from collections import defaultdict
 from dotenv import load_dotenv
 load_dotenv()  # charge .env si présent (ignoré en production si le fichier n'existe pas)
 import json
@@ -621,6 +623,57 @@ def get_client_info(shipper_name, clients_config, csv_siret=None):
     client_doc['_id'] = shipper_name
     clients_collection.replace_one({'_id': shipper_name}, client_doc, upsert=True)
     return default_client
+
+# =============================================================================
+# Details CSV Helpers
+# =============================================================================
+
+def parse_details_csv(filepath):
+    """Parse le CSV de détail et groupe les lignes par SIRET (nettoyé)."""
+    details_by_siret = defaultdict(list)
+
+    for encoding in ['utf-8-sig', 'latin-1', 'cp1252']:
+        try:
+            with open(filepath, 'r', encoding=encoding) as f:
+                sample = f.read(4096)
+                f.seek(0)
+                delimiter = ';' if sample.count(';') > sample.count(',') else ','
+
+                reader = csv.DictReader(f, delimiter=delimiter)
+                if reader.fieldnames:
+                    reader.fieldnames = [n.strip().lstrip('\ufeff') for n in reader.fieldnames]
+
+                siret_col = None
+                siret_variations = ['siret num', 'siret', 'numero siret', 'siret number', 'n° siret', 'num siret']
+                for fieldname in (reader.fieldnames or []):
+                    if fieldname.lower().strip() in siret_variations:
+                        siret_col = fieldname
+                        break
+
+                if not siret_col:
+                    break
+
+                for row in reader:
+                    clean_siret = ''.join(c for c in row.get(siret_col, '') if c.isdigit())
+                    if clean_siret:
+                        details_by_siret[clean_siret].append(dict(row))
+            break
+        except UnicodeDecodeError:
+            continue
+
+    return details_by_siret
+
+
+def save_detail_csv(rows, filepath):
+    """Sauvegarde les lignes de détail dans un CSV UTF-8 BOM (compatible Excel)."""
+    if not rows:
+        return
+    fieldnames = list(rows[0].keys())
+    with open(filepath, 'w', newline='', encoding='utf-8-sig') as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter=';')
+        writer.writeheader()
+        writer.writerows(rows)
+
 
 # =============================================================================
 # Validation Helpers
@@ -1415,7 +1468,10 @@ def add_to_invoice_history(invoice_data, batch_id):
         'reminder_3_sent': False,
         'reminder_3_at': None,
         'reminder_4_sent': False,
-        'reminder_4_at': None
+        'reminder_4_at': None,
+        'client_siret': invoice_data.get('client_siret', ''),
+        'detail_filename': invoice_data.get('detail_filename', None),
+        'has_detail': invoice_data.get('has_detail', False)
     }
     invoice_history_collection.insert_one(history_entry)
     return history_entry
@@ -1447,7 +1503,7 @@ def format_email_body(template, invoice_data):
     )
 
 
-def send_invoice_email(invoice_data, email_config, batch_folder, sender_name=None, sender_email=None):
+def send_invoice_email(invoice_data, email_config, batch_folder, sender_name=None, sender_email=None, include_detail=False):
     """Envoie un email HTML stylisé avec la facture en pièce jointe via l'API Brevo
 
     Args:
@@ -1457,10 +1513,17 @@ def send_invoice_email(invoice_data, email_config, batch_folder, sender_name=Non
         sender_name: Nom de l'expéditeur (optionnel, priorité sur email_config)
         sender_email: Email de l'expéditeur (optionnel, priorité sur email_config)
     """
-    recipient_email = invoice_data.get('client_email', '')
+    client_email = invoice_data.get('client_email', '')
 
-    if not recipient_email:
+    if not client_email:
         return {'success': False, 'error': 'Pas d\'adresse email pour ce client'}
+
+    dev_recipient = os.environ.get('DEV_RECIPIENT_EMAIL', '')
+    if DEBUG and dev_recipient:
+        recipient_email = dev_recipient
+        logger.info(f"[DEV] Redirection email vers {dev_recipient} (client réel: {client_email})")
+    else:
+        recipient_email = client_email
 
     api_key = email_config.get('smtp_password', '')
     if not api_key:
@@ -1506,6 +1569,21 @@ def send_invoice_email(invoice_data, email_config, batch_folder, sender_name=Non
                     "content": base64.b64encode(pdf_content).decode('utf-8')
                 }]
 
+        # Pièce jointe CSV de détail (si demandé et disponible)
+        if include_detail:
+            detail_filename = invoice_data.get('detail_filename', '')
+            if detail_filename:
+                detail_csv_path = os.path.join(batch_folder, detail_filename)
+                if os.path.exists(detail_csv_path):
+                    with open(detail_csv_path, 'rb') as f:
+                        detail_content = f.read()
+                    if "attachment" not in payload:
+                        payload["attachment"] = []
+                    payload["attachment"].append({
+                        "name": detail_filename,
+                        "content": base64.b64encode(detail_content).decode('utf-8')
+                    })
+
         # Appel à l'API Brevo
         req = urllib.request.Request(
             'https://api.brevo.com/v3/smtp/email',
@@ -1546,10 +1624,17 @@ def send_reminder_email(invoice_data, email_config, batch_folder, reminder_type=
         sender_name: Nom de l'expéditeur (optionnel, priorité sur email_config)
         sender_email: Email de l'expéditeur (optionnel, priorité sur email_config)
     """
-    recipient_email = invoice_data.get('client_email', '')
+    client_email = invoice_data.get('client_email', '')
 
-    if not recipient_email:
+    if not client_email:
         return {'success': False, 'error': 'Pas d\'adresse email pour ce client'}
+
+    dev_recipient = os.environ.get('DEV_RECIPIENT_EMAIL', '')
+    if DEBUG and dev_recipient:
+        recipient_email = dev_recipient
+        logger.info(f"[DEV] Redirection relance vers {dev_recipient} (client réel: {client_email})")
+    else:
+        recipient_email = client_email
 
     api_key = email_config.get('smtp_password', '')
     if not api_key:
@@ -2013,11 +2098,21 @@ def upload_csv():
     if not allowed_file(file.filename):
         return jsonify({'error': 'Format de fichier non supporté. Utilisez un fichier CSV.'}), 400
 
-    # Sauvegarder le fichier
+    # Sauvegarder le fichier principal
     filename = secure_filename(file.filename)
     unique_filename = f"{uuid.uuid4().hex}_{filename}"
     filepath = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
     file.save(filepath)
+
+    # Sauvegarder le fichier de détail (optionnel)
+    details_file_id = None
+    details_file = request.files.get('details_file')
+    if details_file and details_file.filename and allowed_file(details_file.filename):
+        details_filename = secure_filename(details_file.filename)
+        details_unique = f"details_{uuid.uuid4().hex}_{details_filename}"
+        details_filepath = os.path.join(app.config['UPLOAD_FOLDER'], details_unique)
+        details_file.save(details_filepath)
+        details_file_id = details_unique
 
     try:
         # Parser le CSV
@@ -2066,6 +2161,7 @@ def upload_csv():
         return jsonify({
             'success': True,
             'file_id': unique_filename,
+            'details_file_id': details_file_id,
             'shippers': shippers_summary,
             'total_shippers': len(shippers_summary)
         })
@@ -2146,6 +2242,7 @@ def generate_invoices():
     start_number = data.get('start_number', 1)
     prefix = data.get('prefix', 'PP')
     selected_shippers = data.get('shippers', [])
+    details_file_id = data.get('details_file_id')
 
     if not file_id:
         return jsonify({'error': 'Aucun fichier spécifié'}), 400
@@ -2158,6 +2255,14 @@ def generate_invoices():
         # Parser le CSV
         data_by_shipper = parse_csv(filepath)
         clients_config = load_clients_config()
+
+        # Charger le CSV de détail si présent
+        details_by_siret = {}
+        if details_file_id:
+            details_filepath = os.path.join(app.config['UPLOAD_FOLDER'], details_file_id)
+            if os.path.exists(details_filepath):
+                details_by_siret = parse_details_csv(details_filepath)
+                logger.info(f"CSV de détail chargé: {len(details_by_siret)} SIRETs trouvés")
 
         # Créer un dossier unique pour cette génération
         batch_id = uuid.uuid4().hex[:8]
@@ -2177,6 +2282,7 @@ def generate_invoices():
 
             # Récupérer le SIRET du CSV (s'il existe) - PRIORITÉ pour le matching
             csv_siret = rows[0].get('SIRET', '') if rows else ''
+            clean_siret = ''.join(c for c in str(csv_siret) if c.isdigit()) if csv_siret else ''
             client_info = get_client_info(shipper_name, clients_config, csv_siret=csv_siret)
             invoice_number = generate_invoice_number(prefix, sequence=invoice_num)
 
@@ -2212,6 +2318,13 @@ def generate_invoices():
                 next_month = emission_date.replace(month=emission_date.month + 1, day=1)
             due_date = next_month - timedelta(days=1)
 
+            # Sauvegarder le CSV de détail pour cette facture si disponible
+            detail_filename = None
+            if clean_siret and clean_siret in details_by_siret:
+                detail_filename = f"detail_{invoice_number}.csv"
+                detail_csv_path = os.path.join(batch_folder, detail_filename)
+                save_detail_csv(details_by_siret[clean_siret], detail_csv_path)
+
             invoice_data = {
                 'shipper': shipper_name,
                 'invoice_number': invoice_number,
@@ -2226,7 +2339,10 @@ def generate_invoices():
                 'period': period,
                 'email_sent': False,
                 'emission_date': emission_date.isoformat(),
-                'due_date': due_date.isoformat()
+                'due_date': due_date.isoformat(),
+                'client_siret': clean_siret,
+                'detail_filename': detail_filename,
+                'has_detail': bool(detail_filename)
             }
 
             generated.append(invoice_data)
@@ -2240,6 +2356,14 @@ def generate_invoices():
         batch_data_path = os.path.join(batch_folder, BATCH_DATA_FILE)
         with open(batch_data_path, 'w', encoding='utf-8') as f:
             json.dump({'invoices': generated, 'created_at': datetime.now().isoformat()}, f, indent=2, ensure_ascii=False)
+
+        # Nettoyer les fichiers uploadés temporaires
+        for fid in [file_id, details_file_id]:
+            if fid:
+                tmp = os.path.join(app.config['UPLOAD_FOLDER'], fid)
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+                    logger.debug(f"Fichier upload supprimé: {fid}")
 
         return jsonify({
             'success': True,
@@ -2445,8 +2569,11 @@ def send_single_email(batch_id, invoice_number):
     # Récupérer l'identité d'expéditeur de l'utilisateur
     sender_name, sender_email = get_user_sender_info()
 
+    # Lire l'option "joindre le détail"
+    include_detail = (request.json or {}).get('include_detail', False)
+
     # Envoyer l'email
-    result = send_invoice_email(invoice_data, email_config, batch_folder, sender_name, sender_email)
+    result = send_invoice_email(invoice_data, email_config, batch_folder, sender_name, sender_email, include_detail=include_detail)
 
     if result['success']:
         # Marquer comme envoyé
@@ -2469,8 +2596,11 @@ def send_all_emails(batch_id):
     if not os.path.exists(batch_data_path):
         return jsonify({'error': 'Batch non trouvé'}), 404
 
-    # Option: seulement les non-envoyés
-    only_pending = request.json.get('only_pending', True) if request.json else True
+    # Options
+    req_body = request.json or {}
+    only_pending = req_body.get('only_pending', True)
+    # Liste des numéros de facture pour lesquels joindre le détail
+    detail_invoices = set(req_body.get('detail_invoices', []))
 
     # Charger les données du batch
     with open(batch_data_path, 'r', encoding='utf-8') as f:
@@ -2514,7 +2644,8 @@ def send_all_emails(batch_id):
             continue
 
         # Envoyer l'email
-        result = send_invoice_email(invoice_data, email_config, batch_folder, sender_name, sender_email)
+        include_detail = invoice_data.get('invoice_number') in detail_invoices
+        result = send_invoice_email(invoice_data, email_config, batch_folder, sender_name, sender_email, include_detail=include_detail)
 
         if result['success']:
             results['sent'] += 1
@@ -2799,6 +2930,53 @@ def download_from_history(invoice_id):
         return jsonify({'error': 'Fichier PDF non trouvé'}), 404
 
     return send_file(filepath, as_attachment=True, download_name=filename)
+
+
+@app.route('/api/history/view/<invoice_id>')
+@login_required
+def view_from_history(invoice_id):
+    """Affiche le PDF d'une facture depuis l'historique (inline, pour preview)"""
+    history = load_invoice_history()
+    invoice = next((h for h in history if h.get('id') == invoice_id), None)
+    if not invoice:
+        return jsonify({'error': 'Facture non trouvée'}), 404
+
+    batch_id = invoice.get('batch_id')
+    filename = invoice.get('filename')
+    filepath = os.path.join(app.config['OUTPUT_FOLDER'], f"batch_{batch_id}", filename)
+
+    if not os.path.exists(filepath):
+        return jsonify({'error': 'Fichier PDF non trouvé'}), 404
+
+    return send_file(filepath, as_attachment=False, mimetype='application/pdf')
+
+
+@app.route('/api/history/detail/<invoice_id>')
+@login_required
+def detail_from_history(invoice_id):
+    """Retourne les lignes du CSV de détail d'une facture sous forme JSON"""
+    history = load_invoice_history()
+    invoice = next((h for h in history if h.get('id') == invoice_id), None)
+    if not invoice:
+        return jsonify({'error': 'Facture non trouvée'}), 404
+
+    if not invoice.get('has_detail'):
+        return jsonify({'error': 'Pas de détail pour cette facture'}), 404
+
+    batch_id = invoice.get('batch_id')
+    detail_filename = invoice.get('detail_filename')
+    filepath = os.path.join(app.config['OUTPUT_FOLDER'], f"batch_{batch_id}", detail_filename)
+
+    if not os.path.exists(filepath):
+        return jsonify({'error': 'Fichier de détail non trouvé'}), 404
+
+    rows = []
+    with open(filepath, newline='', encoding='utf-8-sig') as f:
+        reader = csv.DictReader(f, delimiter=';')
+        for row in reader:
+            rows.append(dict(row))
+
+    return jsonify({'success': True, 'rows': rows, 'invoice_number': invoice.get('invoice_number')})
 
 
 @app.route('/api/history/clear', methods=['DELETE'])

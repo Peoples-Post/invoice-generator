@@ -22,6 +22,9 @@ echo "Serveur démarré sur: http://localhost:5001"
 echo "Appuyez sur Ctrl+C pour arrêter"
 echo ""
 
+# Bibliothèques système requises par WeasyPrint (macOS Homebrew)
+export DYLD_LIBRARY_PATH="/opt/homebrew/lib:$DYLD_LIBRARY_PATH"
+
 # Lance le serveur
 cd "$SCRIPT_DIR"
 python app.py

@@ -287,6 +287,72 @@ a:hover {
     color: var(--color-gray-500);
 }
 
+.upload-zone-compact {
+    padding: var(--spacing-md) var(--spacing-lg);
+}
+
+.selected-file-badge {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    padding: var(--spacing-sm) var(--spacing-md);
+    background: var(--color-gray-100);
+    border-radius: var(--radius-md);
+    font-size: 0.875rem;
+    color: var(--color-gray-700);
+    margin-bottom: var(--spacing-sm);
+}
+
+.btn-clear-file {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--color-gray-400);
+    padding: 2px 6px;
+    border-radius: var(--radius-sm);
+    margin-left: auto;
+    font-size: 0.75rem;
+}
+
+.btn-clear-file:hover {
+    color: var(--color-danger, #e53e3e);
+    background: var(--color-gray-200);
+}
+
+.details-upload-section {
+    margin-top: var(--spacing-lg);
+    padding-top: var(--spacing-lg);
+    border-top: 1px solid var(--color-gray-200);
+}
+
+.details-upload-label {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--color-gray-700);
+    margin-bottom: var(--spacing-sm);
+}
+
+.detail-checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.75rem;
+    color: var(--color-gray-500);
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.detail-checkbox-label input {
+    cursor: pointer;
+}
+
+.optional-tag {
+    font-size: 0.75rem;
+    font-weight: 400;
+    color: var(--color-gray-400);
+    margin-left: var(--spacing-xs);
+}
+
 /* Upload Progress */
 .upload-progress {
     text-align: center;
@@ -1263,6 +1329,46 @@ a:hover {
 .history-action-btn.delete:hover {
     background-color: var(--color-error-light);
     color: var(--color-error);
+}
+
+.history-action-btn.preview:hover {
+    background-color: rgba(48, 38, 240, 0.1);
+    color: var(--color-primary);
+}
+
+.history-action-btn.detail:hover {
+    background-color: rgba(16, 163, 127, 0.1);
+    color: #10a37f;
+}
+
+.detail-table-wrapper {
+    overflow-x: auto;
+}
+
+.detail-preview-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8rem;
+    white-space: nowrap;
+}
+
+.detail-preview-table th {
+    background-color: var(--color-gray-100);
+    padding: 8px 12px;
+    text-align: left;
+    font-weight: 600;
+    border-bottom: 2px solid var(--color-gray-200);
+    position: sticky;
+    top: 0;
+}
+
+.detail-preview-table td {
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--color-gray-100);
+}
+
+.detail-preview-table tr:hover td {
+    background-color: var(--color-gray-50);
 }
 
 .history-empty {

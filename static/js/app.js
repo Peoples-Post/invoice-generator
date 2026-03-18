@@ -5,6 +5,9 @@
 // State
 let currentFileId = null;
 let currentBatchId = null;
+let currentDetailsFileId = null;
+let selectedMainFile = null;
+let selectedDetailsFile = null;
 let shippersData = [];
 let invoicesData = [];
 
@@ -76,31 +79,80 @@ uploadZone.addEventListener('dragleave', () => {
 uploadZone.addEventListener('drop', (e) => {
     e.preventDefault();
     uploadZone.classList.remove('dragover');
-
     const files = e.dataTransfer.files;
-    if (files.length > 0) {
-        handleFileUpload(files[0]);
-    }
+    if (files.length > 0) setMainFile(files[0]);
 });
 
 fileInput.addEventListener('change', (e) => {
-    if (e.target.files.length > 0) {
-        handleFileUpload(e.target.files[0]);
-    }
+    if (e.target.files.length > 0) setMainFile(e.target.files[0]);
 });
 
-async function handleFileUpload(file) {
+function setMainFile(file) {
     if (!file.name.endsWith('.csv')) {
         showToast('Veuillez sélectionner un fichier CSV', 'error');
         return;
     }
-
-    // Show progress
+    selectedMainFile = file;
+    document.getElementById('main-file-name').textContent = file.name;
     uploadZone.classList.add('hidden');
+    document.getElementById('upload-files-ready').classList.remove('hidden');
+}
+
+// Details CSV
+const detailsFileInput = document.getElementById('details-file-input');
+const detailsUploadZone = document.getElementById('details-upload-zone');
+
+detailsUploadZone.addEventListener('click', () => detailsFileInput.click());
+detailsUploadZone.addEventListener('dragover', (e) => { e.preventDefault(); detailsUploadZone.classList.add('dragover'); });
+detailsUploadZone.addEventListener('dragleave', () => detailsUploadZone.classList.remove('dragover'));
+detailsUploadZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    detailsUploadZone.classList.remove('dragover');
+    if (e.dataTransfer.files.length > 0) setDetailsFile(e.dataTransfer.files[0]);
+});
+detailsFileInput.addEventListener('change', (e) => {
+    if (e.target.files.length > 0) setDetailsFile(e.target.files[0]);
+});
+
+function setDetailsFile(file) {
+    if (!file.name.endsWith('.csv')) {
+        showToast('Le fichier de détail doit être un CSV', 'error');
+        return;
+    }
+    selectedDetailsFile = file;
+    document.getElementById('details-file-name').textContent = file.name;
+    document.getElementById('details-file-info').classList.remove('hidden');
+    detailsUploadZone.classList.add('hidden');
+}
+
+document.getElementById('btn-clear-main').addEventListener('click', () => {
+    selectedMainFile = null;
+    fileInput.value = '';
+    document.getElementById('upload-files-ready').classList.add('hidden');
+    uploadZone.classList.remove('hidden');
+    clearDetailsFile();
+});
+
+document.getElementById('btn-clear-details').addEventListener('click', clearDetailsFile);
+
+function clearDetailsFile() {
+    selectedDetailsFile = null;
+    detailsFileInput.value = '';
+    document.getElementById('details-file-info').classList.add('hidden');
+    detailsUploadZone.classList.remove('hidden');
+}
+
+document.getElementById('btn-analyze').addEventListener('click', () => {
+    if (selectedMainFile) handleFileUpload(selectedMainFile, selectedDetailsFile);
+});
+
+async function handleFileUpload(file, detailsFile = null) {
+    document.getElementById('upload-files-ready').classList.add('hidden');
     uploadProgress.classList.remove('hidden');
 
     const formData = new FormData();
     formData.append('file', file);
+    if (detailsFile) formData.append('details_file', detailsFile);
 
     try {
         const response = await fetch('/api/upload', {
@@ -115,6 +167,7 @@ async function handleFileUpload(file) {
         }
 
         currentFileId = data.file_id;
+        currentDetailsFileId = data.details_file_id || null;
         shippersData = data.shippers;
 
         showPreview(data);
@@ -129,7 +182,11 @@ async function handleFileUpload(file) {
 function resetUpload() {
     uploadZone.classList.remove('hidden');
     uploadProgress.classList.add('hidden');
+    document.getElementById('upload-files-ready').classList.add('hidden');
     fileInput.value = '';
+    clearDetailsFile();
+    selectedMainFile = null;
+    currentDetailsFileId = null;
 }
 
 // ==========================================================================
@@ -264,6 +321,7 @@ document.getElementById('btn-generate').addEventListener('click', async () => {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 file_id: currentFileId,
+                details_file_id: currentDetailsFileId,
                 prefix: prefix,
                 start_number: startNumber,
                 shippers: selectedShippers
@@ -316,6 +374,13 @@ function renderInvoicesList(invoices) {
         let emailStatus = '';
         let emailButton = '';
 
+        const detailCheckbox = inv.has_detail && !inv.email_sent
+            ? `<label class="detail-checkbox-label" title="Joindre le CSV de détail à l'email">
+                   <input type="checkbox" class="detail-include-cb" id="detail-cb-${inv.invoice_number}" checked>
+                   📎 Avec détail
+               </label>`
+            : '';
+
         if (inv.email_sent) {
             emailStatus = '<span class="invoice-email-status sent">✓ Email envoyé</span>';
             emailButton = '<button class="btn btn-send-email btn-sm" disabled>Envoyé</button>';
@@ -359,6 +424,7 @@ function renderInvoicesList(invoices) {
                             <line x1="12" y1="15" x2="12" y2="3"></line>
                         </svg>
                     </a>
+                    ${detailCheckbox}
                     ${emailButton}
                 </div>
             </div>
@@ -398,9 +464,13 @@ window.sendSingleEmail = async function(invoiceNumber) {
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner"></span>';
 
+    const includeDetail = document.getElementById(`detail-cb-${invoiceNumber}`)?.checked ?? false;
+
     try {
         const response = await fetch(`/api/email/send/${currentBatchId}/${invoiceNumber}`, {
-            method: 'POST'
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ include_detail: includeDetail })
         });
 
         const data = await response.json();
@@ -432,10 +502,16 @@ document.getElementById('btn-send-all-emails').addEventListener('click', async (
     btn.innerHTML = '<span class="spinner"></span> Envoi en cours...';
 
     try {
+        const detailInvoices = [];
+        document.querySelectorAll('.detail-include-cb:checked').forEach(cb => {
+            const invoiceNum = cb.id.replace('detail-cb-', '');
+            detailInvoices.push(invoiceNum);
+        });
+
         const response = await fetch(`/api/email/send-all/${currentBatchId}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ only_pending: true })
+            body: JSON.stringify({ only_pending: true, detail_invoices: detailInvoices })
         });
 
         const data = await response.json();
@@ -2024,6 +2100,22 @@ function renderHistory(history) {
                 <td>${r3Btn}</td>
                 <td>${r4Btn}</td>
                 <td class="actions-cell">
+                    <button class="history-action-btn preview" data-action="preview-invoice" data-id="${safeId}" title="Aperçu facture">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                            <circle cx="12" cy="12" r="3"></circle>
+                        </svg>
+                    </button>
+                    ${inv.has_detail ? `<button class="history-action-btn detail" data-action="preview-detail" data-id="${safeId}" title="Aperçu détail">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="8" y1="6" x2="21" y2="6"></line>
+                            <line x1="8" y1="12" x2="21" y2="12"></line>
+                            <line x1="8" y1="18" x2="21" y2="18"></line>
+                            <line x1="3" y1="6" x2="3.01" y2="6"></line>
+                            <line x1="3" y1="12" x2="3.01" y2="12"></line>
+                            <line x1="3" y1="18" x2="3.01" y2="18"></line>
+                        </svg>
+                    </button>` : ''}
                     <button class="history-action-btn download" data-action="download" data-id="${safeId}" title="Télécharger">
                         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
@@ -2043,6 +2135,20 @@ function renderHistory(history) {
     }).join('');
 
     // Attach event listeners
+    tbody.querySelectorAll('[data-action="preview-invoice"]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const id = decodeURIComponent(btn.dataset.id);
+            previewInvoiceFromHistory(id);
+        });
+    });
+
+    tbody.querySelectorAll('[data-action="preview-detail"]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const id = decodeURIComponent(btn.dataset.id);
+            previewDetailFromHistory(id);
+        });
+    });
+
     tbody.querySelectorAll('[data-action="download"]').forEach(btn => {
         btn.addEventListener('click', () => {
             const id = decodeURIComponent(btn.dataset.id);
@@ -2122,6 +2228,49 @@ function updateHistoryStats(history) {
 
 function downloadFromHistory(id) {
     window.location.href = `/api/history/download/${encodeURIComponent(id)}`;
+}
+
+function previewInvoiceFromHistory(id) {
+    const inv = historyData.find(h => h.id === id);
+    const modal = document.getElementById('history-preview-modal');
+    const title = document.getElementById('history-preview-title');
+    const iframe = document.getElementById('history-preview-iframe');
+
+    title.textContent = inv ? `Facture ${inv.invoice_number}` : 'Aperçu facture';
+    iframe.src = `/api/history/view/${encodeURIComponent(id)}`;
+    modal.classList.remove('hidden');
+}
+
+async function previewDetailFromHistory(id) {
+    const inv = historyData.find(h => h.id === id);
+    const modal = document.getElementById('history-detail-modal');
+    const title = document.getElementById('history-detail-title');
+    const body = document.getElementById('history-detail-body');
+
+    title.textContent = inv ? `Détail — ${inv.invoice_number}` : 'Détail';
+    body.innerHTML = '<p>Chargement...</p>';
+    modal.classList.remove('hidden');
+
+    try {
+        const res = await fetch(`/api/history/detail/${encodeURIComponent(id)}`);
+        const data = await res.json();
+        if (!data.success || !data.rows.length) {
+            body.innerHTML = '<p>Aucune donnée disponible.</p>';
+            return;
+        }
+        const headers = Object.keys(data.rows[0]);
+        body.innerHTML = `
+            <div class="detail-table-wrapper">
+                <table class="detail-preview-table">
+                    <thead><tr>${headers.map(h => `<th>${escapeHtml(h)}</th>`).join('')}</tr></thead>
+                    <tbody>${data.rows.map(row =>
+                        `<tr>${headers.map(h => `<td>${escapeHtml(row[h] ?? '')}</td>`).join('')}</tr>`
+                    ).join('')}</tbody>
+                </table>
+            </div>`;
+    } catch {
+        body.innerHTML = '<p>Erreur lors du chargement du détail.</p>';
+    }
 }
 
 async function togglePaymentStatus(id) {
@@ -2639,6 +2788,30 @@ if (reminderResultsModal) {
 // ==========================================================================
 // Email Preview
 // ==========================================================================
+
+// History PDF preview modal
+const historyPreviewModal = document.getElementById('history-preview-modal');
+if (historyPreviewModal) {
+    document.getElementById('history-preview-close').addEventListener('click', () => {
+        historyPreviewModal.classList.add('hidden');
+        document.getElementById('history-preview-iframe').src = '';
+    });
+    document.getElementById('history-preview-backdrop').addEventListener('click', () => {
+        historyPreviewModal.classList.add('hidden');
+        document.getElementById('history-preview-iframe').src = '';
+    });
+}
+
+// History detail CSV modal
+const historyDetailModal = document.getElementById('history-detail-modal');
+if (historyDetailModal) {
+    document.getElementById('history-detail-close').addEventListener('click', () => {
+        historyDetailModal.classList.add('hidden');
+    });
+    document.getElementById('history-detail-backdrop').addEventListener('click', () => {
+        historyDetailModal.classList.add('hidden');
+    });
+}
 
 const emailPreviewModal = document.getElementById('email-preview-modal');
 if (emailPreviewModal) {

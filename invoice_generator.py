@@ -10,13 +10,8 @@ import json
 from datetime import datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from collections import defaultdict
-from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4
-from reportlab.lib.units import mm
-from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image, PageBreak
-from reportlab.pdfbase import pdfmetrics
-from reportlab.pdfbase.ttfonts import TTFont
+from jinja2 import Environment, FileSystemLoader
+from weasyprint import HTML as WeasyHTML
 import argparse
 
 
@@ -33,11 +28,11 @@ EMETTEUR = {
     "iban": "FR7616958000018908124561391"
 }
 
-# Chemin vers le fichier de configuration des clients
+# Chemins
 CLIENTS_CONFIG_FILE = os.path.join(os.path.dirname(__file__), "clients.json")
-
-# Chemin vers le logo
-LOGO_PATH = os.path.join(os.path.dirname(__file__), "logo.png")
+TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "templates")
+FONTS_DIR = os.path.join(os.path.dirname(__file__), "static", "fonts")
+FONT_URL = f"file://{os.path.join(FONTS_DIR, 'Montserrat-Regular.ttf')}"
 
 
 def load_clients_config():
@@ -323,84 +318,19 @@ def build_description(row):
 
 
 class InvoicePDFGenerator:
-    """Générateur de factures PDF."""
+    """Générateur de factures PDF via HTML → WeasyPrint."""
 
     def __init__(self, output_dir="output"):
         self.output_dir = output_dir
         os.makedirs(output_dir, exist_ok=True)
-        self.styles = getSampleStyleSheet()
-        self._setup_styles()
-
-    def _setup_styles(self):
-        """Configure les styles personnalisés."""
-        self.styles.add(ParagraphStyle(
-            name='InvoiceTitle',
-            fontSize=24,
-            fontName='Helvetica-Bold',
-            textColor=colors.black,
-            spaceAfter=10
-        ))
-
-        self.styles.add(ParagraphStyle(
-            name='CompanyName',
-            fontSize=14,
-            fontName='Helvetica-Bold',
-            textColor=colors.black,
-            spaceAfter=5
-        ))
-
-        self.styles.add(ParagraphStyle(
-            name='CompanyInfo',
-            fontSize=10,
-            fontName='Helvetica',
-            textColor=colors.black,
-            spaceAfter=2
-        ))
-
-        self.styles.add(ParagraphStyle(
-            name='TableHeader',
-            fontSize=9,
-            fontName='Helvetica-Bold',
-            textColor=colors.black
-        ))
-
-        self.styles.add(ParagraphStyle(
-            name='TableCell',
-            fontSize=9,
-            fontName='Helvetica',
-            textColor=colors.black
-        ))
-
-        self.styles.add(ParagraphStyle(
-            name='TableSubCell',
-            fontSize=8,
-            fontName='Helvetica',
-            textColor=colors.grey
-        ))
-
-        self.styles.add(ParagraphStyle(
-            name='SectionTitle',
-            fontSize=12,
-            fontName='Helvetica-Bold',
-            textColor=colors.black,
-            spaceBefore=20,
-            spaceAfter=10
-        ))
-
-        self.styles.add(ParagraphStyle(
-            name='Footer',
-            fontSize=8,
-            fontName='Helvetica',
-            textColor=colors.black
-        ))
+        self._jinja_env = Environment(loader=FileSystemLoader(TEMPLATES_DIR))
 
     def generate_invoice(self, shipper_name, rows, client_info, invoice_number, emission_date=None):
-        """Génère une facture PDF pour un expéditeur."""
-
+        """Génère une facture PDF via HTML → WeasyPrint."""
         if emission_date is None:
             emission_date = datetime.now()
 
-        # Date d'échéance: dernier jour du mois d'émission
+        # Date d'échéance : dernier jour du mois d'émission
         if emission_date.month == 12:
             next_month = emission_date.replace(year=emission_date.year + 1, month=1, day=1)
         else:
@@ -410,212 +340,70 @@ class InvoicePDFGenerator:
         filename = f"facture_{invoice_number.replace('-', '_')}_{shipper_name.replace(' ', '_')}.pdf"
         filepath = os.path.join(self.output_dir, filename)
 
-        doc = SimpleDocTemplate(
-            filepath,
-            pagesize=A4,
-            rightMargin=20*mm,
-            leftMargin=20*mm,
-            topMargin=20*mm,
-            bottomMargin=20*mm
-        )
-
-        elements = []
-
-        # En-tête avec logo et titre
-        elements.extend(self._build_header(invoice_number, emission_date, echeance_date))
-
-        # Informations émetteur et client
-        elements.extend(self._build_parties_info(client_info))
-
-        # Tableau des lignes de facture
-        elements.extend(self._build_invoice_table(rows))
-
-        # Détails de paiement et totaux
+        # Calcul des totaux
         total_ht, total_tva, total_ttc, tva_by_rate = self._calculate_totals(rows)
-        elements.extend(self._build_payment_details(total_ht, total_tva, total_ttc, invoice_number, tva_by_rate))
 
-        # Mentions légales
-        elements.extend(self._build_legal_mentions())
-
-        doc.build(elements)
-
-        return filepath, total_ttc
-
-    def _build_header(self, invoice_number, emission_date, echeance_date):
-        """Construit l'en-tête de la facture."""
-        elements = []
-
-        # Tableau pour le logo et le titre
-        header_data = []
-
-        # Titre "Facture" à gauche
-        title = Paragraph("<u>Facture</u>", self.styles['InvoiceTitle'])
-
-        # Logo à droite (préserver le ratio d'aspect automatiquement)
-        if os.path.exists(LOGO_PATH):
-            # Laisser reportlab calculer les dimensions en préservant le ratio
-            # On spécifie seulement la hauteur désirée
-            from PIL import Image as PILImage
-            with PILImage.open(LOGO_PATH) as img:
-                orig_width, orig_height = img.size
-                # Hauteur cible de 30mm, largeur calculée automatiquement
-                target_height = 30*mm
-                target_width = target_height * (orig_width / orig_height)
-            logo = Image(LOGO_PATH, width=target_width, height=target_height)
-        else:
-            logo = Paragraph("PEOPLES POST", self.styles['CompanyName'])
-
-        header_data.append([title, logo])
-
-        header_table = Table(header_data, colWidths=[100*mm, 70*mm])
-        header_table.setStyle(TableStyle([
-            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-            ('ALIGN', (0, 0), (0, 0), 'LEFT'),
-            ('ALIGN', (1, 0), (1, 0), 'RIGHT'),
-        ]))
-
-        elements.append(header_table)
-        elements.append(Spacer(1, 10*mm))
-
-        # Informations de facture
-        invoice_info = [
-            ["Numéro de facture", invoice_number],
-            ["Date d'émission", emission_date.strftime("%d/%m/%Y")],
-            ["Date d'échéance", echeance_date.strftime("%d/%m/%Y")],
-        ]
-
-        for label, value in invoice_info:
-            p = Paragraph(f"<b>{label}</b>     {value}", self.styles['CompanyInfo'])
-            elements.append(p)
-
-        elements.append(Spacer(1, 10*mm))
-
-        return elements
-
-    def _build_parties_info(self, client_info):
-        """Construit les informations émetteur et client."""
-        elements = []
-
-        # Tableau à deux colonnes pour émetteur et client
-        emetteur_content = [
-            Paragraph(f"<b>{EMETTEUR['nom']}</b>", self.styles['CompanyName']),
-            Paragraph(EMETTEUR['adresse'], self.styles['CompanyInfo']),
-            Paragraph(f"{EMETTEUR['code_postal']}, {EMETTEUR['ville']}, {EMETTEUR['pays']}", self.styles['CompanyInfo']),
-            Paragraph(EMETTEUR['email'], self.styles['CompanyInfo']),
-            Paragraph(f"SIRET {EMETTEUR['siret']}", self.styles['CompanyInfo']),
-        ]
-
-        client_content = [
-            Paragraph(f"<b>{client_info['nom']}</b>", self.styles['CompanyName']),
-            Paragraph(client_info['adresse'], self.styles['CompanyInfo']),
-            Paragraph(f"{client_info['code_postal']}, {client_info['ville']}, {client_info['pays']}", self.styles['CompanyInfo']),
-            Paragraph(client_info['email'], self.styles['CompanyInfo']),
-            Paragraph(f"SIRET {client_info['siret']}", self.styles['CompanyInfo']),
-        ]
-
-        # Créer les cellules
-        left_cell = []
-        for p in emetteur_content:
-            left_cell.append(p)
-
-        right_cell = []
-        for p in client_content:
-            right_cell.append(p)
-
-        parties_table = Table(
-            [[left_cell, right_cell]],
-            colWidths=[85*mm, 85*mm]
-        )
-        parties_table.setStyle(TableStyle([
-            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-            ('ALIGN', (0, 0), (0, 0), 'LEFT'),
-            ('ALIGN', (1, 0), (1, 0), 'RIGHT'),
-        ]))
-
-        elements.append(parties_table)
-        elements.append(Spacer(1, 15*mm))
-
-        return elements
-
-    def _build_invoice_table(self, rows):
-        """Construit le tableau des lignes de facture."""
-        elements = []
-
-        # En-tête du tableau
-        header = [
-            Paragraph("<b>Description</b>", self.styles['TableHeader']),
-            Paragraph("<b>Quantité</b>", self.styles['TableHeader']),
-            Paragraph("<b>Prix unitaire</b>", self.styles['TableHeader']),
-            Paragraph("<b>TVA (%)</b>", self.styles['TableHeader']),
-            Paragraph("<b>Total HT</b>", self.styles['TableHeader']),
-        ]
-
-        table_data = [header]
-
-        # Lignes de données
+        # Préparation des lignes du tableau
+        items = []
         for row in rows:
             main_line, sub_line = build_description(row)
-
             qty = int(float(row.get('Quantité', '1').replace(',', '.') or '1'))
             price = format_price(row.get('Prix', '0'))
             tva = row.get('TVA en %', '20').replace(',', '.').strip() or '20'
-            total_ht = price * qty
+            line_ht = price * qty
+            items.append({
+                'main_line': main_line,
+                'sub_line': sub_line,
+                'quantity': qty,
+                'unit_price': format_currency(price),
+                'tax_rate': tva,
+                'total_ht': format_currency(line_ht),
+            })
 
-            # Description sur deux lignes
-            desc = Paragraph(
-                f"{main_line}<br/><font size='8' color='grey'>{sub_line}</font>",
-                self.styles['TableCell']
-            )
+        # Détail TVA par taux
+        tax_breakdown = []
+        for rate in sorted(tva_by_rate.keys(), reverse=True):
+            amount = tva_by_rate[rate]
+            if amount > 0:
+                rate_str = str(rate).rstrip('0').rstrip('.') if '.' in str(rate) else str(rate)
+                tax_breakdown.append({'rate': rate_str, 'amount': format_currency(amount)})
 
-            table_data.append([
-                desc,
-                Paragraph(str(qty), self.styles['TableCell']),
-                Paragraph(format_currency(price), self.styles['TableCell']),
-                Paragraph(f"{tva} %", self.styles['TableCell']),
-                Paragraph(format_currency(total_ht), self.styles['TableCell']),
-            ])
+        # Données du template
+        context = {
+            'document_title': 'Facture',
+            'invoice_number': invoice_number,
+            'invoice_date': emission_date.strftime('%d/%m/%Y'),
+            'due_date': echeance_date.strftime('%d/%m/%Y'),
+            'customer': {
+                'name': client_info.get('nom', shipper_name),
+                'address': client_info.get('adresse', ''),
+                'postal_code': client_info.get('code_postal', ''),
+                'city': client_info.get('ville', ''),
+                'country': client_info.get('pays', 'France'),
+                'email': client_info.get('email', ''),
+                'siret': client_info.get('siret', ''),
+            },
+            'items': items,
+            'subtotal': format_currency(total_ht),
+            'tax_breakdown': tax_breakdown,
+            'tax_total': format_currency(total_tva),
+            'grand_total': format_currency(total_ttc),
+            'notes': None,
+            'font_url': FONT_URL,
+            'font_bold_url': FONT_URL,
+        }
 
-        # Créer le tableau
-        col_widths = [80*mm, 20*mm, 25*mm, 20*mm, 25*mm]
+        # Rendu HTML → PDF
+        template = self._jinja_env.get_template('invoice_pdf.html')
+        html_string = template.render(**context)
+        WeasyHTML(string=html_string, base_url=os.path.dirname(__file__)).write_pdf(filepath)
 
-        invoice_table = Table(table_data, colWidths=col_widths, repeatRows=1)
-        invoice_table.setStyle(TableStyle([
-            # En-tête
-            ('BACKGROUND', (0, 0), (-1, 0), colors.Color(0.95, 0.95, 0.95)),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, 0), 9),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 10),
-            ('TOPPADDING', (0, 0), (-1, 0), 10),
-
-            # Corps
-            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-            ('FONTSIZE', (0, 1), (-1, -1), 9),
-            ('BOTTOMPADDING', (0, 1), (-1, -1), 8),
-            ('TOPPADDING', (0, 1), (-1, -1), 8),
-
-            # Alignement
-            ('ALIGN', (1, 0), (-1, -1), 'CENTER'),
-            ('ALIGN', (0, 0), (0, -1), 'LEFT'),
-            ('ALIGN', (-1, 0), (-1, -1), 'RIGHT'),
-            ('ALIGN', (-2, 0), (-2, -1), 'RIGHT'),
-
-            # Bordures
-            ('LINEBELOW', (0, 0), (-1, 0), 1, colors.Color(0.8, 0.8, 0.8)),
-            ('LINEBELOW', (0, 1), (-1, -2), 0.5, colors.Color(0.9, 0.9, 0.9)),
-            ('LINEBELOW', (0, -1), (-1, -1), 1, colors.Color(0.8, 0.8, 0.8)),
-
-            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ]))
-
-        elements.append(invoice_table)
-        elements.append(Spacer(1, 10*mm))
-
-        return elements
+        return filepath, total_ttc
 
     def _calculate_totals(self, rows):
         """Calcule les totaux HT, TVA par taux et TTC."""
         total_ht = Decimal('0.00')
-        tva_by_rate = {}  # {taux: montant_tva}
+        tva_by_rate = {}
 
         for row in rows:
             qty = int(float(row.get('Quantité', '1').replace(',', '.') or '1'))
@@ -625,114 +413,15 @@ class InvoicePDFGenerator:
 
             line_ht = price * qty
             line_tva = (line_ht * tva_rate / 100).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-
             total_ht += line_ht
 
-            # Grouper TVA par taux
-            if tva_rate not in tva_by_rate:
-                tva_by_rate[tva_rate] = Decimal('0.00')
+            tva_by_rate.setdefault(tva_rate, Decimal('0.00'))
             tva_by_rate[tva_rate] += line_tva
 
         total_tva = sum(tva_by_rate.values(), Decimal('0.00'))
         total_ttc = total_ht + total_tva
 
         return total_ht, total_tva, total_ttc, tva_by_rate
-
-    def _build_payment_details(self, total_ht, total_tva, total_ttc, invoice_number, tva_by_rate=None):
-        """Construit les détails de paiement et les totaux."""
-        elements = []
-
-        elements.append(Paragraph("<b>Détails du paiements</b>", self.styles['SectionTitle']))
-
-        # Tableau à deux colonnes: infos bancaires à gauche, totaux à droite
-        bank_info = [
-            ["Nom du bénéficiaire", EMETTEUR['nom']],
-            ["BIC", EMETTEUR['bic']],
-            ["IBAN", EMETTEUR['iban']],
-        ]
-
-        # Construire les lignes de TVA par taux
-        totals_info = [
-            ["Total HT", format_currency(total_ht)],
-        ]
-
-        # Ajouter chaque taux de TVA séparément (triés par taux décroissant)
-        if tva_by_rate:
-            for rate in sorted(tva_by_rate.keys(), reverse=True):
-                amount = tva_by_rate[rate]
-                if amount > 0:  # N'afficher que si montant > 0
-                    # Formater le taux (enlever les décimales inutiles: 20.00 -> 20, 5.50 -> 5.5)
-                    rate_str = str(rate).rstrip('0').rstrip('.') if '.' in str(rate) else str(rate)
-                    totals_info.append([f"TVA {rate_str}%", format_currency(amount)])
-
-        totals_info.extend([
-            ["Montant Total de la TVA", format_currency(total_tva)],
-            ["", ""],
-            ["<b>Total TTC</b>", f"<b>{format_currency(total_ttc)}</b>"],
-        ])
-
-        # Infos bancaires
-        bank_content = []
-        for label, value in bank_info:
-            p = Paragraph(f"<b>{label}</b>     {value}", self.styles['CompanyInfo'])
-            bank_content.append(p)
-
-        # Totaux
-        totals_data = []
-        for label, value in totals_info:
-            totals_data.append([
-                Paragraph(label, self.styles['CompanyInfo']),
-                Paragraph(value, self.styles['CompanyInfo'])
-            ])
-
-        totals_table = Table(totals_data, colWidths=[45*mm, 30*mm])
-        totals_table.setStyle(TableStyle([
-            ('ALIGN', (0, 0), (0, -1), 'RIGHT'),
-            ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
-            ('LINEABOVE', (0, -1), (-1, -1), 1, colors.black),
-            ('TOPPADDING', (0, -1), (-1, -1), 5),
-        ]))
-
-        # Assemblage
-        main_table = Table(
-            [[bank_content, totals_table]],
-            colWidths=[95*mm, 75*mm]
-        )
-        main_table.setStyle(TableStyle([
-            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-            ('ALIGN', (1, 0), (1, 0), 'RIGHT'),
-        ]))
-
-        elements.append(main_table)
-        elements.append(Spacer(1, 15*mm))
-
-        # Ligne de signature
-        signature = Paragraph(
-            f"PEOPLES POST SAS <font color='white'>{'_' * 100}</font> {invoice_number}",
-            self.styles['CompanyInfo']
-        )
-        elements.append(signature)
-        elements.append(Spacer(1, 5*mm))
-
-        return elements
-
-    def _build_legal_mentions(self):
-        """Construit les mentions légales obligatoires."""
-        elements = []
-
-        mentions = [
-            "Type de transaction : Bien et service",
-            "Pas d'escompte accordé pour paiement anticipé.",
-            "En cas de non-paiement à la date d'échéance, des pénalités calculées à trois fois le taux d'intérêt légal seront appliquées.",
-            "Tout retard de paiement entraînera une indemnité forfaitaire pour frais de recouvrement de 40€.",
-        ]
-
-        for mention in mentions:
-            p = Paragraph(mention, self.styles['Footer'])
-            elements.append(p)
-            elements.append(Spacer(1, 2*mm))
-
-        return elements
 
 
 def main():

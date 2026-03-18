@@ -61,9 +61,10 @@
                 <div class="card" id="step-upload">
                     <div class="card-header">
                         <span class="step-badge">1</span>
-                        <h2>Importer le fichier CSV</h2>
+                        <h2>Importer les fichiers CSV</h2>
                     </div>
                     <div class="card-body">
+                        <!-- Zone de dépôt du CSV principal -->
                         <div class="upload-zone" id="upload-zone">
                             <div class="upload-icon">
                                 <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -72,10 +73,42 @@
                                     <line x1="12" y1="3" x2="12" y2="15"></line>
                                 </svg>
                             </div>
-                            <p class="upload-text">Glissez-déposez votre fichier CSV ici</p>
+                            <p class="upload-text">Glissez-déposez votre CSV de facturation</p>
                             <p class="upload-hint">ou cliquez pour sélectionner</p>
                             <input type="file" id="file-input" accept=".csv" hidden>
                         </div>
+
+                        <!-- Affiché après sélection du CSV principal -->
+                        <div class="hidden" id="upload-files-ready">
+                            <div class="selected-file-badge">
+                                <span>📄</span>
+                                <span id="main-file-name"></span>
+                                <button class="btn-clear-file" id="btn-clear-main">✕</button>
+                            </div>
+
+                            <div class="details-upload-section">
+                                <p class="details-upload-label">CSV de détail <span class="optional-tag">optionnel — joint en pièce jointe à l'email</span></p>
+                                <div class="upload-zone upload-zone-compact" id="details-upload-zone">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--color-gray-400); margin-bottom: 6px;">
+                                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                        <polyline points="17 8 12 3 7 8"></polyline>
+                                        <line x1="12" y1="3" x2="12" y2="15"></line>
+                                    </svg>
+                                    <p class="upload-hint">Glisser-déposer ou cliquer pour ajouter</p>
+                                    <input type="file" id="details-file-input" accept=".csv" hidden>
+                                </div>
+                                <div class="selected-file-badge hidden" id="details-file-info">
+                                    <span>📊</span>
+                                    <span id="details-file-name"></span>
+                                    <button class="btn-clear-file" id="btn-clear-details">✕</button>
+                                </div>
+                            </div>
+
+                            <button class="btn btn-primary" id="btn-analyze" style="margin-top: var(--spacing-lg); width: 100%;">
+                                Analyser les factures →
+                            </button>
+                        </div>
+
                         <div class="upload-progress hidden" id="upload-progress">
                             <div class="progress-bar">
                                 <div class="progress-fill"></div>
@@ -921,6 +954,33 @@ Veuillez trouver ci-joint votre facture..."></textarea>
         </div>
     </div>
     {% endif %}
+
+    <!-- Modal: aperçu PDF historique -->
+    <div class="modal hidden" id="history-preview-modal">
+        <div class="modal-backdrop" id="history-preview-backdrop"></div>
+        <div class="modal-content modal-xl" style="height: 90vh; display: flex; flex-direction: column;">
+            <div class="modal-header">
+                <h3 id="history-preview-title">Aperçu facture</h3>
+                <button class="modal-close" id="history-preview-close">&times;</button>
+            </div>
+            <div class="modal-body" style="flex: 1; padding: 0; overflow: hidden;">
+                <iframe id="history-preview-iframe" src="" style="width: 100%; height: 100%; border: none;"></iframe>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: aperçu détail CSV historique -->
+    <div class="modal hidden" id="history-detail-modal">
+        <div class="modal-backdrop" id="history-detail-backdrop"></div>
+        <div class="modal-content modal-xl">
+            <div class="modal-header">
+                <h3 id="history-detail-title">Détail facture</h3>
+                <button class="modal-close" id="history-detail-close">&times;</button>
+            </div>
+            <div class="modal-body" id="history-detail-body" style="overflow-x: auto; max-height: 70vh; overflow-y: auto;">
+            </div>
+        </div>
+    </div>
 
     <!-- Toast notifications -->
     <div class="toast-container" id="toast-container"></div>
