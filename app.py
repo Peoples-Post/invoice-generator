@@ -8,6 +8,8 @@ Author: Peoples Post Team
 
 import os
 import sys
+from dotenv import load_dotenv
+load_dotenv()  # charge .env si présent (ignoré en production si le fichier n'existe pas)
 import json
 import uuid
 import shutil
@@ -244,6 +246,7 @@ def connect_mongodb(uri, use_srv=True):
     try:
         logger.info(f"Connexion MongoDB avec format {'SRV' if use_srv else 'standard'}...")
         logger.info(f"URI hosts: {uri.split('@')[1].split('/')[0] if '@' in uri else 'unknown'}")
+        is_local = 'localhost' in uri or '127.0.0.1' in uri
         client = MongoClient(
             uri,
             serverSelectionTimeoutMS=15000,
@@ -251,7 +254,7 @@ def connect_mongodb(uri, use_srv=True):
             socketTimeoutMS=30000,
             retryWrites=True,
             w='majority',
-            tls=True
+            tls=not is_local
         )
         # Test connection
         client.admin.command('ping')
@@ -920,7 +923,7 @@ def init_super_admin():
             # Utiliser pbkdf2 pour compatibilité
             users_collection.insert_one({
                 'email': 'gabriel@peoplespost.fr',
-                'password': generate_password_hash('admin123', method='pbkdf2:sha256'),
+                'password': generate_password_hash(os.environ.get('ADMIN_PASSWORD', 'admin123'), method='pbkdf2:sha256'),
                 'name': 'Gabriel',
                 'role': 'super_admin',
                 'created_at': datetime.now()
@@ -1635,6 +1638,7 @@ def send_reminder_email(invoice_data, email_config, batch_folder, reminder_type=
 @optional_limit(LOGIN_LIMIT)
 def login():
     """Route de connexion"""
+    title = os.environ.get('LOGIN_TITLE')
     if current_user.is_authenticated:
         # Rediriger les clients vers le portail client
         if current_user.is_client():
@@ -1651,12 +1655,12 @@ def login():
             logger.warning(f"Tentative de connexion avec données manquantes - IP: {request.remote_addr}")
             if request.is_json:
                 return jsonify({'success': False, 'error': 'Email et mot de passe requis'}), 400
-            return render_template('login.html', error='Email et mot de passe requis')
+            return render_template('login.html', error='Email et mot de passe requis', title=title)
 
         # Vérification
         if users_collection is None:
             logger.error("users_collection est None - pas de connexion DB")
-            return render_template('login.html', error='Service temporairement indisponible')
+            return render_template('login.html', error='Service temporairement indisponible', title=title)
 
         user_data = users_collection.find_one({'email': email})
         logger.info(f"User lookup for {email}: {'found' if user_data else 'not found'}")
@@ -1690,9 +1694,9 @@ def login():
         logger.warning(f"Échec de connexion: {email} - IP: {request.remote_addr}")
         if request.is_json:
             return jsonify({'success': False, 'error': 'Email ou mot de passe incorrect'}), 401
-        return render_template('login.html', error='Email ou mot de passe incorrect')
+        return render_template('login.html', error='Email ou mot de passe incorrect', title=title)
 
-    return render_template('login.html')
+    return render_template('login.html', title=title)
 
 
 @app.route('/logout')

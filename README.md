@@ -63,11 +63,35 @@ source venv/bin/activate  # Linux/Mac
 # Installer les dépendances
 pip install -r requirements.txt
 
+# Configurer les variables d'environnement
+cp .env.example .env
+# Éditer .env avec vos valeurs
+
 # Lancer le serveur
 python app.py
 ```
 
 Puis ouvrez **http://localhost:5000**
+
+### Variables d'environnement (local)
+
+Créez un fichier `.env` à la racine du projet (jamais commité) :
+
+```env
+FLASK_ENV=development
+SECRET_KEY=votre-cle-secrete-locale
+MONGO_URI=mongodb+srv://...
+ADMIN_PASSWORD=votre-mot-de-passe-admin
+```
+
+| Variable | Description | Défaut |
+| -------- | ----------- | ------ |
+| `FLASK_ENV` | Environnement (`development` / `production`) | `production` |
+| `SECRET_KEY` | Clé secrète pour les sessions Flask | obligatoire en prod |
+| `MONGO_URI` | URI de connexion MongoDB Atlas | fallback codé en dur |
+| `ADMIN_PASSWORD` | Mot de passe du compte super admin à la création | `admin123` |
+
+> `ADMIN_PASSWORD` n'est utilisé qu'à la **première création** du compte super admin. Changer cette valeur après création n'a aucun effet.
 
 ---
 
