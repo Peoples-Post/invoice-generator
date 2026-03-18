@@ -2081,7 +2081,8 @@ def update_my_sender():
 @login_required
 def index():
     """Page d'accueil"""
-    return render_template('index.html', user=current_user, now=datetime.now())
+    header_color = 'red' if DEBUG else 'white'
+    return render_template('index.html', user=current_user, now=datetime.now(), header_color=header_color)
 
 
 @app.route('/api/upload', methods=['POST'])

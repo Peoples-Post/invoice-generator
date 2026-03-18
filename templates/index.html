@@ -27,7 +27,10 @@
     </div>
 
     <!-- Header -->
-    <header class="header">
+    <header class="header" style="background-color: {{ header_color }};">
+        {% if header_color == 'red' %}
+            <p style="font-weight: bold; padding: 10px;">Mode développement</p>
+        {% endif %}
         <div class="container header-content">
             <div class="logo">
                 <img src="/static/logo.png" alt="Peoples Post" class="logo-img">
