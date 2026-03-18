@@ -200,6 +200,7 @@ function showPreview(data) {
 document.getElementById('btn-back').addEventListener('click', () => {
     stepPreview.classList.add('hidden');
     stepConfig.classList.add('hidden');
+    stepUpload.classList.remove('hidden');
     resetUpload();
 });
 
