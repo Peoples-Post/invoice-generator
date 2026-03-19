@@ -4164,6 +4164,97 @@ def download_clients_template():
 
 
 # ============================================================================
+# Routes Debug (admin uniquement)
+# ============================================================================
+
+@app.route('/api/debug/files')
+@login_required
+def debug_files():
+    """Liste les fichiers des répertoires output et uploads (admin uniquement)"""
+    if not current_user.is_admin():
+        return jsonify({'error': 'Accès refusé'}), 403
+
+    result = {}
+    for folder_name, folder_path in [
+        ('output', app.config['OUTPUT_FOLDER']),
+        ('uploads', app.config['UPLOAD_FOLDER'])
+    ]:
+        files = []
+        total_size = 0
+        if os.path.exists(folder_path):
+            for root, dirs, filenames in os.walk(folder_path):
+                for f in filenames:
+                    filepath = os.path.join(root, f)
+                    rel_path = os.path.relpath(filepath, folder_path)
+                    size = os.path.getsize(filepath)
+                    total_size += size
+                    files.append({
+                        'path': rel_path,
+                        'size': size,
+                        'modified': datetime.fromtimestamp(os.path.getmtime(filepath)).isoformat()
+                    })
+        # Trier par date de modification décroissante
+        files.sort(key=lambda x: x['modified'], reverse=True)
+        result[folder_name] = {
+            'base_path': folder_path,
+            'files': files,
+            'total_size': total_size,
+            'file_count': len(files)
+        }
+    return jsonify(result)
+
+
+@app.route('/api/debug/files', methods=['DELETE'])
+@login_required
+def debug_delete_files():
+    """Supprime des fichiers ou dossiers sélectionnés (admin uniquement)"""
+    if not current_user.is_admin():
+        return jsonify({'error': 'Accès refusé'}), 403
+
+    data = request.json
+    items = data.get('items', [])
+    # items = [{'folder': 'output', 'path': 'batch_abc123/facture.pdf'}, ...]
+
+    deleted = 0
+    errors = []
+
+    for item in items:
+        folder_name = item.get('folder')
+        rel_path = item.get('path')
+
+        if folder_name == 'output':
+            base_dir = app.config['OUTPUT_FOLDER']
+        elif folder_name == 'uploads':
+            base_dir = app.config['UPLOAD_FOLDER']
+        else:
+            errors.append(f"Dossier inconnu: {folder_name}")
+            continue
+
+        filepath = safe_filepath(base_dir, rel_path)
+        if not filepath:
+            errors.append(f"Chemin invalide: {rel_path}")
+            continue
+
+        try:
+            if os.path.isdir(filepath):
+                shutil.rmtree(filepath)
+                deleted += 1
+            elif os.path.isfile(filepath):
+                os.remove(filepath)
+                deleted += 1
+            else:
+                errors.append(f"Introuvable: {rel_path}")
+        except Exception as e:
+            errors.append(f"Erreur {rel_path}: {str(e)}")
+
+    return jsonify({
+        'success': True,
+        'deleted': deleted,
+        'errors': errors
+    })
+
+
+# ============================================================================
 # Portail Client - Routes et fonctions
 # ============================================================================
 

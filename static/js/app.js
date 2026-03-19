@@ -57,6 +57,8 @@ document.querySelectorAll('.nav-link').forEach(link => {
             loadHistory();
         } else if (tabId === 'users') {
             loadUsers();
+        } else if (tabId === 'debug') {
+            loadDebugFiles();
         } else if (tabId === 'generator') {
             // Réinitialiser le générateur pour afficher le formulaire d'upload
             stepPreview.classList.add('hidden');
@@ -3452,5 +3454,186 @@ document.addEventListener('DOMContentLoaded', () => {
     } else if (window.location.hash === '#users') {
         const usersTab = document.querySelector('[data-tab="users"]');
         if (usersTab) usersTab.click();
+    } else if (window.location.hash === '#debug') {
+        const debugTab = document.querySelector('[data-tab="debug"]');
+        if (debugTab) debugTab.click();
+    }
+});
+
+// ==========================================================================
+// Debug - File Explorer
+// ==========================================================================
+
+function formatFileSize(bytes) {
+    if (bytes === 0) return '0 o';
+    const units = ['o', 'Ko', 'Mo', 'Go'];
+    const i = Math.floor(Math.log(bytes) / Math.log(1024));
+    return (bytes / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0) + ' ' + units[i];
+}
+
+async function loadDebugFiles() {
+    const container = document.getElementById('debug-folders');
+    if (!container) return;
+
+    container.innerHTML = '<p>Chargement...</p>';
+
+    try {
+        const response = await fetch('/api/debug/files');
+        const data = await response.json();
+
+        let html = '';
+
+        for (const [folderName, folder] of Object.entries(data)) {
+            // Grouper les fichiers par sous-dossier
+            const groups = {};
+            folder.files.forEach(file => {
+                const parts = file.path.split('/');
+                const group = parts.length > 1 ? parts[0] : '.';
+                if (!groups[group]) groups[group] = [];
+                groups[group].push(file);
+            });
+
+            html += `
+                <div class="debug-folder">
+                    <div class="debug-folder-header">
+                        <h3>${escapeHtml(folderName)}/</h3>
+                        <span class="debug-folder-meta">${folder.file_count} fichiers - ${formatFileSize(folder.total_size)} - ${escapeHtml(folder.base_path)}</span>
+                    </div>
+                    <div class="debug-folder-content">
+            `;
+
+            if (folder.file_count === 0) {
+                html += '<p class="debug-empty">Vide</p>';
+            } else {
+                for (const [groupName, files] of Object.entries(groups)) {
+                    const groupSize = files.reduce((s, f) => s + f.size, 0);
+                    html += `
+                        <div class="debug-group">
+                            <div class="debug-group-header">
+                                <span class="debug-toggle collapsed" data-target="debug-group-${folderName}-${escapeHtml(groupName)}">&#9654;</span>
+                                <label class="debug-group-label">
+                                    <input type="checkbox" class="debug-group-cb" data-folder="${escapeHtml(folderName)}" data-group="${escapeHtml(groupName)}">
+                                    <strong>${escapeHtml(groupName === '.' ? 'Fichiers racine' : groupName + '/')}</strong>
+                                    <span class="debug-group-meta">${files.length} fichiers - ${formatFileSize(groupSize)}</span>
+                                </label>
+                            </div>
+                            <div class="debug-file-list collapsed" id="debug-group-${folderName}-${escapeHtml(groupName)}">
+                    `;
+                    for (const file of files) {
+                        const modified = new Date(file.modified).toLocaleString('fr-FR');
+                        html += `
+                            <label class="debug-file-item">
+                                <input type="checkbox" class="debug-file-cb" data-folder="${escapeHtml(folderName)}" data-path="${escapeHtml(file.path)}">
+                                <span class="debug-file-name">${escapeHtml(file.path)}</span>
+                                <span class="debug-file-size">${formatFileSize(file.size)}</span>
+                                <span class="debug-file-date">${modified}</span>
+                            </label>
+                        `;
+                    }
+                    html += '</div></div>';
+                }
+            }
+
+            html += '</div></div>';
+        }
+
+        container.innerHTML = html;
+
+        // Group checkbox → sélectionne tous les fichiers du groupe
+        container.querySelectorAll('.debug-group-cb').forEach(cb => {
+            cb.addEventListener('change', () => {
+                const folder = cb.dataset.folder;
+                const group = cb.dataset.group;
+                const prefix = group === '.' ? '' : group + '/';
+                container.querySelectorAll(`.debug-file-cb[data-folder="${folder}"]`).forEach(fcb => {
+                    if (group === '.' ? !fcb.dataset.path.includes('/') : fcb.dataset.path.startsWith(prefix)) {
+                        fcb.checked = cb.checked;
+                    }
+                });
+                updateDebugDeleteBtn();
+            });
+        });
+
+        container.querySelectorAll('.debug-file-cb').forEach(cb => {
+            cb.addEventListener('change', updateDebugDeleteBtn);
+        });
+
+        // Toggle collapse/expand
+        container.querySelectorAll('.debug-toggle').forEach(toggle => {
+            toggle.addEventListener('click', () => {
+                const target = document.getElementById(toggle.dataset.target);
+                if (!target) return;
+                const isCollapsed = target.classList.toggle('collapsed');
+                toggle.classList.toggle('collapsed', isCollapsed);
+            });
+        });
+
+    } catch (error) {
+        container.innerHTML = `<p class="debug-empty">Erreur: ${escapeHtml(error.message)}</p>`;
+    }
+}
+
+function updateDebugDeleteBtn() {
+    const selected = document.querySelectorAll('.debug-file-cb:checked');
+    const btn = document.getElementById('btn-debug-delete');
+    if (btn) {
+        btn.disabled = selected.length === 0;
+        btn.textContent = selected.length > 0
+            ? `Supprimer (${selected.length})`
+            : 'Supprimer la sélection';
+    }
+}
+
+// Refresh
+document.getElementById('btn-debug-refresh')?.addEventListener('click', loadDebugFiles);
+
+// Delete
+document.getElementById('btn-debug-delete')?.addEventListener('click', async () => {
+    const selected = document.querySelectorAll('.debug-file-cb:checked');
+    if (selected.length === 0) return;
+
+    // Regrouper par dossier parent pour proposer de supprimer le dossier entier
+    const items = [];
+    const folderPaths = new Set();
+
+    selected.forEach(cb => {
+        const path = cb.dataset.path;
+        const folder = cb.dataset.folder;
+        items.push({ folder, path });
+
+        // Tracker les dossiers parents
+        const parts = path.split('/');
+        if (parts.length > 1) {
+            folderPaths.add(`${folder}::${parts[0]}`);
+        }
+    });
+
+    if (!confirm(`Supprimer ${items.length} fichier(s) ? Cette action est irréversible.`)) return;
+
+    const btn = document.getElementById('btn-debug-delete');
+    btn.disabled = true;
+    btn.textContent = 'Suppression...';
+
+    try {
+        const response = await fetch('/api/debug/files', {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ items })
+        });
+
+        const data = await response.json();
+
+        if (data.deleted > 0) {
+            showToast(`${data.deleted} fichier(s) supprimé(s)`, 'success');
+        }
+        if (data.errors && data.errors.length > 0) {
+            showToast(`${data.errors.length} erreur(s): ${data.errors[0]}`, 'error');
+        }
+
+        loadDebugFiles();
+    } catch (error) {
+        showToast('Erreur lors de la suppression', 'error');
+    } finally {
+        updateDebugDeleteBtn();
     }
 });

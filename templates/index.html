@@ -42,6 +42,7 @@
                 <a href="#" class="nav-link" data-tab="settings">Paramètres</a>
                 {% if user and user.is_admin() %}
                 <a href="#" class="nav-link" data-tab="users">Utilisateurs</a>
+                <a href="#" class="nav-link" data-tab="debug">Debug</a>
                 {% endif %}
             </nav>
             <div class="user-menu">
@@ -647,6 +648,21 @@ Veuillez trouver ci-joint votre facture..."></textarea>
                         </form>
                     </div>
                 </div>
+            </section>
+
+            <section id="tab-debug" class="tab-content">
+                <div class="page-header">
+                    <h1>Debug - Fichiers serveur</h1>
+                    <p>Explorateur des répertoires output et uploads</p>
+                </div>
+
+                <div class="debug-toolbar">
+                    <button class="btn btn-primary btn-sm" id="btn-debug-refresh">Rafraîchir</button>
+                    <button class="btn btn-danger btn-sm" id="btn-debug-delete" disabled>Supprimer la sélection</button>
+                    <span class="debug-stats" id="debug-stats"></span>
+                </div>
+
+                <div id="debug-folders"></div>
             </section>
             {% endif %}
         </div>
