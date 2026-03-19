@@ -2875,6 +2875,24 @@ def create_html_email_preview(body_text, invoice_data, email_type='invoice'):
 # Routes Historique
 # ============================================================================
 
+@app.route('/api/history/next-invoice-number')
+@login_required
+def get_next_invoice_number():
+    """Retourne le prochain numéro de séquence disponible basé sur le max en base"""
+    invoices = invoice_history_collection.find({}, {'invoice_number': 1})
+    max_seq = 0
+    for inv in invoices:
+        parts = inv.get('invoice_number', '').rsplit('-', 1)
+        if len(parts) == 2:
+            try:
+                seq = int(parts[1])
+                if seq > max_seq:
+                    max_seq = seq
+            except ValueError:
+                pass
+    return jsonify({'next_number': max_seq + 1})
+
+
 @app.route('/api/history', methods=['GET'])
 @login_required
 def get_invoice_history():

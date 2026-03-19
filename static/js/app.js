@@ -244,6 +244,17 @@ function showPreview(data) {
         `;
     }).join('');
 
+    // Pré-remplir le numéro de départ avec le prochain disponible en base
+    fetch('/api/history/next-invoice-number')
+        .then(r => r.json())
+        .then(d => {
+            if (d.next_number) {
+                document.getElementById('invoice-start').value = String(d.next_number).padStart(4, '0');
+                updateInvoicePreview();
+            }
+        })
+        .catch(() => {});
+
     // Show steps
     stepUpload.classList.add('hidden');
     stepPreview.classList.remove('hidden');
