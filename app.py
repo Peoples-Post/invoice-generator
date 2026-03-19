@@ -70,7 +70,6 @@ VERSION = '1.0.0'
 REQUIRED_ENV_VARS = {
     'MONGO_URI': 'URI de connexion MongoDB (mongodb:// ou mongodb+srv://)',
     'ADMIN_PASSWORD': 'Mot de passe du super admin',
-    'SECRET_KEY': 'Clé secrète Flask pour les sessions',
 }
 
 _missing_vars = [
@@ -119,6 +118,12 @@ def setup_logging(app):
 app = Flask(__name__, static_folder='static', template_folder='templates')
 
 secret_key = os.environ.get('SECRET_KEY')
+if not secret_key:
+    if DEBUG:
+        secret_key = 'dev-secret-key-for-development-only'
+    else:
+        secret_key = secrets.token_hex(32)
+        print("ATTENTION: SECRET_KEY non défini en production! Sessions invalides après redémarrage.")
 
 # Configuration
 app.config.update(
