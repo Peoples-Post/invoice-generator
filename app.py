@@ -2578,10 +2578,18 @@ def send_single_email(batch_id, invoice_number):
 
     if result['success']:
         # Marquer comme envoyé
+        now = datetime.now().isoformat()
         batch_data['invoices'][invoice_index]['email_sent'] = True
-        batch_data['invoices'][invoice_index]['email_sent_at'] = datetime.now().isoformat()
+        batch_data['invoices'][invoice_index]['email_sent_at'] = now
         with open(batch_data_path, 'w', encoding='utf-8') as f:
             json.dump(batch_data, f, indent=2, ensure_ascii=False)
+
+        # Mettre à jour l'historique MongoDB
+        invoice_id = f"{batch_id}_{invoice_number}"
+        update_invoice_in_history(invoice_id, {
+            'email_sent': True,
+            'email_sent_at': now
+        })
 
     return jsonify(result)
 
@@ -2650,12 +2658,19 @@ def send_all_emails(batch_id):
 
         if result['success']:
             results['sent'] += 1
+            now = datetime.now().isoformat()
             batch_data['invoices'][i]['email_sent'] = True
-            batch_data['invoices'][i]['email_sent_at'] = datetime.now().isoformat()
+            batch_data['invoices'][i]['email_sent_at'] = now
             results['details'].append({
                 'invoice_number': invoice_data.get('invoice_number'),
                 'status': 'sent',
                 'message': 'Envoyé avec succès'
+            })
+            # Mettre à jour l'historique MongoDB
+            invoice_id = f"{batch_id}_{invoice_data.get('invoice_number')}"
+            update_invoice_in_history(invoice_id, {
+                'email_sent': True,
+                'email_sent_at': now
             })
         else:
             results['failed'] += 1

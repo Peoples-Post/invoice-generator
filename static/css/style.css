@@ -107,7 +107,7 @@ a:hover {
    ========================================================================== */
 
 .container {
-    max-width: 1200px;
+    max-width: 1400px;
     margin: 0 auto;
     padding: 0 var(--spacing-lg);
 }
@@ -1509,6 +1509,38 @@ a:hover {
 .payment-badge.paid:hover {
     background-color: var(--color-warning-light);
     color: var(--color-warning);
+}
+
+/* Email Badge */
+.email-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border-radius: var(--radius-sm);
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: default;
+}
+
+.email-badge.sent {
+    background-color: var(--color-success-light);
+    color: var(--color-success);
+}
+
+.email-badge.not-sent {
+    background-color: var(--color-warning-light);
+    color: var(--color-warning);
+}
+
+.email-badge.no-email {
+    background-color: var(--color-gray-100, #f3f4f6);
+    color: var(--color-gray-400, #9ca3af);
+}
+
+.email-status-cell {
+    text-align: center;
 }
 
 /* Reminder Badge */

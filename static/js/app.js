@@ -57,6 +57,13 @@ document.querySelectorAll('.nav-link').forEach(link => {
             loadHistory();
         } else if (tabId === 'users') {
             loadUsers();
+        } else if (tabId === 'generator') {
+            // Réinitialiser le générateur pour afficher le formulaire d'upload
+            stepPreview.classList.add('hidden');
+            stepConfig.classList.add('hidden');
+            stepResults.classList.add('hidden');
+            stepUpload.classList.remove('hidden');
+            resetUpload();
         }
     });
 });
@@ -393,7 +400,9 @@ function renderInvoicesList(invoices) {
             : '';
 
         if (inv.email_sent) {
-            emailStatus = '<span class="invoice-email-status sent">✓ Email envoyé</span>';
+            const sentDate = inv.email_sent_at ? new Date(inv.email_sent_at).toLocaleString('fr-FR') : '';
+            const tooltip = sentDate ? `Envoyé le ${sentDate}` : 'Email envoyé';
+            emailStatus = `<span class="invoice-email-status sent" title="${tooltip}">✓ Email envoyé</span>`;
             emailButton = '<button class="btn btn-send-email btn-sm" disabled>Envoyé</button>';
         } else if (!inv.client_email) {
             emailStatus = '<span class="invoice-email-status no-email">⚠ Pas d\'email</span>';
@@ -492,6 +501,7 @@ window.sendSingleEmail = async function(invoiceNumber) {
             const inv = invoicesData.find(i => i.invoice_number === invoiceNumber);
             if (inv) {
                 inv.email_sent = true;
+                inv.email_sent_at = new Date().toISOString();
             }
             renderInvoicesList(invoicesData);
             updateEmailSummary(invoicesData);
@@ -2098,6 +2108,15 @@ function renderHistory(history) {
         // Formater la date d'échéance
         const dueDate = inv.due_date ? new Date(inv.due_date).toLocaleDateString('fr-FR') : '-';
 
+        // Email status
+        const emailSent = inv.email_sent;
+        const emailSentAt = inv.email_sent_at ? new Date(inv.email_sent_at).toLocaleString('fr-FR') : '';
+        const emailBadge = emailSent
+            ? `<span class="email-badge sent" title="Envoyé le ${emailSentAt}">✓</span>`
+            : hasEmail
+                ? '<span class="email-badge not-sent" title="Non envoyé">✗</span>'
+                : '<span class="email-badge no-email" title="Pas d\'adresse email">–</span>';
+
         return `
             <tr data-history-id="${safeId}">
                 <td><input type="checkbox" class="history-checkbox" data-id="${safeId}" ${isPaid ? 'disabled' : ''}></td>
@@ -2106,6 +2125,7 @@ function renderHistory(history) {
                 <td class="amount-cell">${inv.total_ttc_formatted || formatCurrency(inv.total_ttc)}</td>
                 <td class="due-date-cell">${dueDate}</td>
                 <td>${paymentBadge}</td>
+                <td class="email-status-cell">${emailBadge}</td>
                 <td>${r1Btn}</td>
                 <td>${r2Btn}</td>
                 <td>${r3Btn}</td>
