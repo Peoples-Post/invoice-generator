@@ -238,10 +238,10 @@ function showPreview(data) {
 
         return `
             <div class="shipper-item">
-                <input type="checkbox" class="shipper-checkbox" data-shipper="${encodedCsvName}" data-shipper-raw="${csvName}" checked>
+                <input type="checkbox" class="shipper-checkbox" data-shipper="${encodedCsvName}" data-shipper-raw="${escapeHtml(csvName)}" checked>
                 <div class="shipper-info">
-                    <div class="shipper-name">${shipper.name}</div>
-                    <div class="shipper-details">${shipper.lines_count} lignes${shipper.client_email && shipper.client_email !== 'email@example.com' ? ' • ' + shipper.client_email : ''}</div>
+                    <div class="shipper-name">${escapeHtml(shipper.name)}</div>
+                    <div class="shipper-details">${shipper.lines_count} lignes${shipper.client_email && shipper.client_email !== 'email@example.com' ? ' • ' + escapeHtml(shipper.client_email) : ''}</div>
                 </div>
                 <div class="shipper-status ${statusClass}" ${!isConfigured ? `data-shipper-key="${safeShipperName}" onclick="openClientConfigFromPreview('${safeShipperName}')"` : ''}>
                     ${statusText}
@@ -489,8 +489,8 @@ function renderInvoicesList(invoices) {
                     </svg>
                 </div>
                 <div class="invoice-info">
-                    <div class="invoice-name">${displayName}</div>
-                    <div class="invoice-number">${inv.invoice_number}${showBothNames ? ' • CSV: ' + inv.shipper : ''}${inv.client_email ? ' • ' + inv.client_email : ''}</div>
+                    <div class="invoice-name">${escapeHtml(displayName)}</div>
+                    <div class="invoice-number">${escapeHtml(inv.invoice_number)}${showBothNames ? ' • CSV: ' + escapeHtml(inv.shipper) : ''}${inv.client_email ? ' • ' + escapeHtml(inv.client_email) : ''}</div>
                 </div>
                 ${emailStatus}
                 <div class="invoice-total">${inv.total_ttc_formatted}</div>

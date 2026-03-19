@@ -350,6 +350,19 @@ def init_invoice_counter(prefix):
     return max_seq
 
 
+def safe_filepath(base_dir, *parts):
+    """Construit un chemin fichier sécurisé et vérifie qu'il reste dans base_dir.
+
+    Protège contre les attaques path traversal (ex: ../../etc/passwd).
+    Retourne le chemin résolu ou None si le chemin sort du répertoire autorisé.
+    """
+    filepath = os.path.realpath(os.path.join(base_dir, *parts))
+    base_real = os.path.realpath(base_dir)
+    if not filepath.startswith(base_real + os.sep) and filepath != base_real:
+        return None
+    return filepath
+
+
 def require_db(f):
     """Décorateur pour vérifier la connexion à la base de données"""
     @wraps(f)
@@ -2465,23 +2478,19 @@ def generate_invoices():
 @login_required
 def download_invoice(batch_id, filename):
     """Télécharge une facture individuelle"""
-    batch_folder = os.path.join(app.config['OUTPUT_FOLDER'], f"batch_{batch_id}")
-    filepath = os.path.join(batch_folder, filename)
-
-    if not os.path.exists(filepath):
+    filepath = safe_filepath(app.config['OUTPUT_FOLDER'], f"batch_{batch_id}", filename)
+    if not filepath or not os.path.exists(filepath):
         return jsonify({'error': 'Fichier non trouvé'}), 404
 
-    return send_file(filepath, as_attachment=True, download_name=filename)
+    return send_file(filepath, as_attachment=True, download_name=os.path.basename(filepath))
 
 
 @app.route('/api/view/<batch_id>/<filename>')
 @login_required
 def view_invoice(batch_id, filename):
     """Visualise une facture dans le navigateur (sans téléchargement)"""
-    batch_folder = os.path.join(app.config['OUTPUT_FOLDER'], f"batch_{batch_id}")
-    filepath = os.path.join(batch_folder, filename)
-
-    if not os.path.exists(filepath):
+    filepath = safe_filepath(app.config['OUTPUT_FOLDER'], f"batch_{batch_id}", filename)
+    if not filepath or not os.path.exists(filepath):
         return jsonify({'error': 'Fichier non trouvé'}), 404
 
     return send_file(filepath, as_attachment=False, mimetype='application/pdf')
@@ -3133,13 +3142,11 @@ def download_from_history(invoice_id):
     batch_id = invoice.get('batch_id')
     filename = invoice.get('filename')
 
-    batch_folder = os.path.join(app.config['OUTPUT_FOLDER'], f"batch_{batch_id}")
-    filepath = os.path.join(batch_folder, filename)
-
-    if not os.path.exists(filepath):
+    filepath = safe_filepath(app.config['OUTPUT_FOLDER'], f"batch_{batch_id}", filename)
+    if not filepath or not os.path.exists(filepath):
         return jsonify({'error': 'Fichier PDF non trouvé'}), 404
 
-    return send_file(filepath, as_attachment=True, download_name=filename)
+    return send_file(filepath, as_attachment=True, download_name=os.path.basename(filepath))
 
 
 @app.route('/api/history/view/<invoice_id>')
@@ -3153,9 +3160,8 @@ def view_from_history(invoice_id):
 
     batch_id = invoice.get('batch_id')
     filename = invoice.get('filename')
-    filepath = os.path.join(app.config['OUTPUT_FOLDER'], f"batch_{batch_id}", filename)
-
-    if not os.path.exists(filepath):
+    filepath = safe_filepath(app.config['OUTPUT_FOLDER'], f"batch_{batch_id}", filename)
+    if not filepath or not os.path.exists(filepath):
         return jsonify({'error': 'Fichier PDF non trouvé'}), 404
 
     return send_file(filepath, as_attachment=False, mimetype='application/pdf')
@@ -3175,9 +3181,8 @@ def detail_from_history(invoice_id):
 
     batch_id = invoice.get('batch_id')
     detail_filename = invoice.get('detail_filename')
-    filepath = os.path.join(app.config['OUTPUT_FOLDER'], f"batch_{batch_id}", detail_filename)
-
-    if not os.path.exists(filepath):
+    filepath = safe_filepath(app.config['OUTPUT_FOLDER'], f"batch_{batch_id}", detail_filename)
+    if not filepath or not os.path.exists(filepath):
         return jsonify({'error': 'Fichier de détail non trouvé'}), 404
 
     rows = []
@@ -4496,13 +4501,11 @@ def download_client_invoice(invoice_id):
     if not batch_id or not filename:
         return jsonify({'error': 'Informations de fichier manquantes'}), 400
 
-    batch_folder = os.path.join(app.config['OUTPUT_FOLDER'], f"batch_{batch_id}")
-    filepath = os.path.join(batch_folder, filename)
-
-    if not os.path.exists(filepath):
+    filepath = safe_filepath(app.config['OUTPUT_FOLDER'], f"batch_{batch_id}", filename)
+    if not filepath or not os.path.exists(filepath):
         return jsonify({'error': 'Fichier PDF non trouvé'}), 404
 
-    return send_file(filepath, as_attachment=True, download_name=filename)
+    return send_file(filepath, as_attachment=True, download_name=os.path.basename(filepath))
 
 
 @app.route('/api/client/invoices/<invoice_id>/view')
@@ -4530,10 +4533,8 @@ def view_client_invoice(invoice_id):
     if not batch_id or not filename:
         return jsonify({'error': 'Informations de fichier manquantes'}), 400
 
-    batch_folder = os.path.join(app.config['OUTPUT_FOLDER'], f"batch_{batch_id}")
-    filepath = os.path.join(batch_folder, filename)
-
-    if not os.path.exists(filepath):
+    filepath = safe_filepath(app.config['OUTPUT_FOLDER'], f"batch_{batch_id}", filename)
+    if not filepath or not os.path.exists(filepath):
         return jsonify({'error': 'Fichier PDF non trouvé'}), 404
 
     # Ouvrir dans le navigateur (inline) au lieu de télécharger
