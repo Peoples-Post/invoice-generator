@@ -2,6 +2,25 @@
  * Peoples Post - Invoice Generator Frontend
  */
 
+// Helpers
+async function safeFetch(url, options) {
+    const response = await safeFetch(url, options);
+    if (!response.ok) {
+        let msg = `Erreur HTTP ${response.status}`;
+        try { const d = await response.clone().json(); if (d.error) msg = d.error; } catch {}
+        throw new Error(msg);
+    }
+    return response;
+}
+
+function debounce(fn, delay = 300) {
+    let timer;
+    return (...args) => {
+        clearTimeout(timer);
+        timer = setTimeout(() => fn(...args), delay);
+    };
+}
+
 // State
 let currentFileId = null;
 let currentBatchId = null;
@@ -164,16 +183,12 @@ async function handleFileUpload(file, detailsFile = null) {
     if (detailsFile) formData.append('details_file', detailsFile);
 
     try {
-        const response = await fetch('/api/upload', {
+        const response = await safeFetch('/api/upload', {
             method: 'POST',
             body: formData
         });
 
         const data = await response.json();
-
-        if (!response.ok) {
-            throw new Error(data.error || 'Erreur lors de l\'upload');
-        }
 
         currentFileId = data.file_id;
         currentDetailsFileId = data.details_file_id || null;
@@ -253,12 +268,7 @@ function showPreview(data) {
         `;
     }).join('');
 
-    // Attacher les événements de configuration client
-    shippersList.querySelectorAll('[data-action="configure-client"]').forEach(el => {
-        el.addEventListener('click', () => {
-            openClientConfigFromPreview(el.dataset.shipperKey);
-        });
-    });
+    // Event listeners handled by delegation (see setupShippersDelegation)
 
     // Pré-remplir le numéro de départ avec le prochain disponible en base
     fetchNextInvoiceNumber();
@@ -302,7 +312,7 @@ function updateInvoicePreview() {
 function fetchNextInvoiceNumber() {
     const prefix = document.getElementById('invoice-prefix').value || 'PP';
     const year = document.getElementById('invoice-year').value || new Date().getFullYear();
-    fetch(`/api/history/next-invoice-number?prefix=${encodeURIComponent(prefix)}&year=${encodeURIComponent(year)}`)
+    safeFetch(`/api/history/next-invoice-number?prefix=${encodeURIComponent(prefix)}&year=${encodeURIComponent(year)}`)
         .then(r => r.json())
         .then(d => {
             if (d.next_number) {
@@ -313,8 +323,9 @@ function fetchNextInvoiceNumber() {
         .catch(() => {});
 }
 
-document.getElementById('invoice-prefix').addEventListener('input', () => { updateInvoicePreview(); fetchNextInvoiceNumber(); });
-document.getElementById('invoice-year').addEventListener('input', () => { updateInvoicePreview(); fetchNextInvoiceNumber(); });
+const debouncedInvoiceUpdate = debounce(() => { updateInvoicePreview(); fetchNextInvoiceNumber(); }, 300);
+document.getElementById('invoice-prefix').addEventListener('input', debouncedInvoiceUpdate);
+document.getElementById('invoice-year').addEventListener('input', debouncedInvoiceUpdate);
 document.getElementById('invoice-start').addEventListener('input', updateInvoicePreview);
 
 // ==========================================================================
@@ -482,7 +493,7 @@ function renderInvoicesList(invoices) {
             emailButton = '<button class="btn btn-send-email btn-sm" disabled>Pas d\'email</button>';
         } else {
             emailStatus = '<span class="invoice-email-status pending">En attente</span>';
-            emailButton = `<button class="btn btn-send-email btn-sm" onclick="sendSingleEmail('${inv.invoice_number}')">Envoyer</button>`;
+            emailButton = `<button class="btn btn-send-email btn-sm" onclick="sendSingleEmail('${inv.invoice_number}', this)">Envoyer</button>`;
         }
 
         // Utiliser company_name (nom de la fiche client) si disponible
@@ -570,8 +581,7 @@ document.getElementById('btn-new-batch').addEventListener('click', () => {
 // Email Sending
 // ==========================================================================
 
-window.sendSingleEmail = async function(invoiceNumber) {
-    const btn = event.target;
+window.sendSingleEmail = async function(invoiceNumber, btn) {
     const originalText = btn.textContent;
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner"></span>';
@@ -579,7 +589,7 @@ window.sendSingleEmail = async function(invoiceNumber) {
     const includeDetail = document.getElementById(`detail-cb-${invoiceNumber}`)?.checked ?? false;
 
     try {
-        const response = await fetch(`/api/email/send/${currentBatchId}/${invoiceNumber}`, {
+        const response = await safeFetch(`/api/email/send/${currentBatchId}/${invoiceNumber}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ include_detail: includeDetail })
@@ -621,7 +631,7 @@ document.getElementById('btn-send-all-emails').addEventListener('click', async (
             detailInvoices.push(invoiceNum);
         });
 
-        const response = await fetch(`/api/email/send-all/${currentBatchId}`, {
+        const response = await safeFetch(`/api/email/send-all/${currentBatchId}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ only_pending: true, detail_invoices: detailInvoices })
@@ -693,7 +703,7 @@ function showEmailResults(results) {
 
 async function refreshInvoicesStatus() {
     try {
-        const response = await fetch(`/api/email/status/${currentBatchId}`);
+        const response = await safeFetch(`/api/email/status/${currentBatchId}`);
         const data = await response.json();
         if (data.success) {
             invoicesData = data.invoices;
@@ -845,7 +855,7 @@ const emailTemplateFieldIds = [
 
 async function loadEmailConfig() {
     try {
-        const response = await fetch('/api/email/config');
+        const response = await safeFetch('/api/email/config');
         const config = await response.json();
 
         // SMTP config (super admin only - fields might not exist)
@@ -897,7 +907,7 @@ async function loadEmailConfig() {
 
 async function loadSenderConfig() {
     try {
-        const response = await fetch('/api/me');
+        const response = await safeFetch('/api/me');
         const data = await response.json();
 
         if (data.success && data.user) {
@@ -934,7 +944,7 @@ document.getElementById('btn-save-email-config').addEventListener('click', async
     };
 
     try {
-        const response = await fetch('/api/email/config', {
+        const response = await safeFetch('/api/email/config', {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(config)
@@ -974,7 +984,7 @@ if (btnSaveSmtpConfig) {
         };
 
         try {
-            const response = await fetch('/api/email/config', {
+            const response = await safeFetch('/api/email/config', {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(config)
@@ -1014,7 +1024,7 @@ if (btnSaveSenderConfig) {
         };
 
         try {
-            const response = await fetch('/api/me/sender', {
+            const response = await safeFetch('/api/me/sender', {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(senderData)
@@ -1048,7 +1058,7 @@ let clientsFilterValue = 'all';
 
 async function loadClients() {
     try {
-        const response = await fetch('/api/clients');
+        const response = await safeFetch('/api/clients');
         allClientsData = await response.json();
 
         applyClientsFilter();
@@ -1235,35 +1245,7 @@ function renderClients(clients) {
         `;
     }).join('');
 
-    // Attach event listeners for edit/delete buttons
-    clientsGrid.querySelectorAll('[data-action="edit"]').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const key = decodeURIComponent(btn.dataset.key);
-            editClient(key);
-        });
-    });
-
-    clientsGrid.querySelectorAll('[data-action="delete"]').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const key = decodeURIComponent(btn.dataset.key);
-            deleteClient(key);
-        });
-    });
-
-    // Attach event listeners for create account buttons
-    clientsGrid.querySelectorAll('[data-action="create-account"]').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const clientKey = btn.dataset.clientKey;
-            openCreateAccountModal(clientKey);
-        });
-    });
-
-    // Attach checkbox change listeners for bulk actions
-    clientsGrid.querySelectorAll('.client-checkbox').forEach(cb => {
-        cb.addEventListener('change', () => {
-            updateClientsBulkActionsBar();
-        });
-    });
+    // Event listeners handled by delegation (see setupClientsDelegation)
 
     // Reset bulk actions bar
     updateClientsBulkActionsBar();
@@ -1272,7 +1254,7 @@ function renderClients(clients) {
 // Edit client
 window.editClient = async function(key) {
     try {
-        const response = await fetch('/api/clients');
+        const response = await safeFetch('/api/clients');
         const clients = await response.json();
         const client = clients[key];
 
@@ -1299,7 +1281,7 @@ window.openClientConfigFromPreview = async function(encodedKey) {
     const key = decodeURIComponent(encodedKey);
 
     try {
-        const response = await fetch('/api/clients');
+        const response = await safeFetch('/api/clients');
         const clients = await response.json();
         const client = clients[key] || {};
 
@@ -1329,7 +1311,7 @@ window.deleteClient = async function(key) {
     }
 
     try {
-        await fetch(`/api/clients/${encodeURIComponent(key)}`, {
+        await safeFetch(`/api/clients/${encodeURIComponent(key)}`, {
             method: 'DELETE'
         });
 
@@ -1467,7 +1449,7 @@ async function handleClientsImport(file) {
     formData.append('mode', 'auto');
 
     try {
-        const response = await fetch('/api/clients/import', {
+        const response = await safeFetch('/api/clients/import', {
             method: 'POST',
             body: formData
         });
@@ -1665,7 +1647,7 @@ async function confirmImportWithDecisions() {
     formData.append('decisions', JSON.stringify(decisions));
 
     try {
-        const response = await fetch('/api/clients/import', {
+        const response = await safeFetch('/api/clients/import', {
             method: 'POST',
             body: formData
         });
@@ -1780,7 +1762,7 @@ async function openCreateAccountModal(clientKey) {
 
     // Get client info
     try {
-        const response = await fetch('/api/clients');
+        const response = await safeFetch('/api/clients');
         const clients = await response.json();
         const client = clients[clientKey];
 
@@ -1829,7 +1811,7 @@ async function createClientAccount() {
     btn.innerHTML = '<span class="loading-small"></span> Création en cours...';
 
     try {
-        const response = await fetch(`/api/clients/${encodeURIComponent(currentClientKey)}/create-account`, {
+        const response = await safeFetch(`/api/clients/${encodeURIComponent(currentClientKey)}/create-account`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -1964,7 +1946,7 @@ document.getElementById('btn-save-client').addEventListener('click', async () =>
     };
 
     try {
-        const response = await fetch(`/api/clients/${encodeURIComponent(clientKey)}`, {
+        const response = await safeFetch(`/api/clients/${encodeURIComponent(clientKey)}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(clientData)
@@ -1997,7 +1979,7 @@ async function refreshPreviewData() {
     if (!currentFileId) return;
 
     try {
-        const response = await fetch(`/api/refresh-preview/${currentFileId}`);
+        const response = await safeFetch(`/api/refresh-preview/${currentFileId}`);
         const data = await response.json();
 
         if (data.success) {
@@ -2057,7 +2039,7 @@ document.getElementById('btn-clients-bulk-export')?.addEventListener('click', as
     try {
         showToast('Préparation de l\'export...', 'info');
 
-        const response = await fetch('/api/clients/bulk-export', {
+        const response = await safeFetch('/api/clients/bulk-export', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ keys })
@@ -2090,7 +2072,7 @@ document.getElementById('btn-clients-bulk-delete')?.addEventListener('click', as
     if (!confirm(`Supprimer définitivement ${keys.length} client(s) ?\n\nCette action est irréversible.`)) return;
 
     try {
-        const response = await fetch('/api/clients/bulk-delete', {
+        const response = await safeFetch('/api/clients/bulk-delete', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ keys })
@@ -2118,7 +2100,7 @@ let historyFilter = 'all';
 async function loadHistory(search = '') {
     try {
         const url = search ? `/api/history?search=${encodeURIComponent(search)}` : '/api/history';
-        const response = await fetch(url);
+        const response = await safeFetch(url);
         const data = await response.json();
 
         if (data.success) {
@@ -2267,63 +2249,7 @@ function renderHistory(history) {
         `;
     }).join('');
 
-    // Attach event listeners
-    tbody.querySelectorAll('[data-action="preview-invoice"]').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const id = decodeURIComponent(btn.dataset.id);
-            previewInvoiceFromHistory(id);
-        });
-    });
-
-    tbody.querySelectorAll('[data-action="preview-detail"]').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const id = decodeURIComponent(btn.dataset.id);
-            previewDetailFromHistory(id);
-        });
-    });
-
-    tbody.querySelectorAll('[data-action="upload-pdf"]').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const id = decodeURIComponent(btn.dataset.id);
-            openReuploadModal(id);
-        });
-    });
-
-    tbody.querySelectorAll('[data-action="download"]').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const id = decodeURIComponent(btn.dataset.id);
-            downloadFromHistory(id);
-        });
-    });
-
-    tbody.querySelectorAll('[data-action="delete-history"]').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const id = decodeURIComponent(btn.dataset.id);
-            deleteFromHistory(id);
-        });
-    });
-
-    tbody.querySelectorAll('[data-action="toggle-payment"]').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const id = decodeURIComponent(btn.dataset.id);
-            togglePaymentStatus(id);
-        });
-    });
-
-    tbody.querySelectorAll('[data-action="send-reminder"]').forEach(btn => {
-        btn.addEventListener('click', () => {
-            const id = decodeURIComponent(btn.dataset.id);
-            const type = parseInt(btn.dataset.type);
-            sendSingleReminder(id, type);
-        });
-    });
-
-    // Attach checkbox change listeners for bulk actions
-    tbody.querySelectorAll('.history-checkbox').forEach(cb => {
-        cb.addEventListener('change', () => {
-            updateBulkActionsBar();
-        });
-    });
+    // Event listeners handled by delegation (see setupHistoryDelegation)
 
     // Reset bulk actions bar
     updateBulkActionsBar();
@@ -2393,7 +2319,7 @@ async function reuploadFile(file, endpoint) {
     const formData = new FormData();
     formData.append('file', file);
     try {
-        const res = await fetch(`/api/history/${encodeURIComponent(reuploadInvoiceId)}/${endpoint}`, {
+        const res = await safeFetch(`/api/history/${encodeURIComponent(reuploadInvoiceId)}/${endpoint}`, {
             method: 'POST',
             body: formData
         });
@@ -2452,7 +2378,7 @@ async function previewDetailFromHistory(id) {
     modal.classList.remove('hidden');
 
     try {
-        const res = await fetch(`/api/history/detail/${encodeURIComponent(id)}`);
+        const res = await safeFetch(`/api/history/detail/${encodeURIComponent(id)}`);
         const data = await res.json();
         if (!data.success || !data.rows.length) {
             body.innerHTML = '<p>Aucune donnée disponible.</p>';
@@ -2481,7 +2407,7 @@ async function togglePaymentStatus(id) {
     const statusText = newStatus === 'paid' ? 'payée' : 'impayée';
 
     try {
-        const response = await fetch(`/api/history/${encodeURIComponent(id)}/payment`, {
+        const response = await safeFetch(`/api/history/${encodeURIComponent(id)}/payment`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ status: newStatus })
@@ -2513,7 +2439,7 @@ async function sendSingleReminder(id, reminderType) {
     }
 
     try {
-        const response = await fetch(`/api/history/${encodeURIComponent(id)}/reminder/${reminderType}`, {
+        const response = await safeFetch(`/api/history/${encodeURIComponent(id)}/reminder/${reminderType}`, {
             method: 'POST'
         });
 
@@ -2567,7 +2493,7 @@ async function sendAllReminders(reminderType) {
     btn.innerHTML = '...';
 
     try {
-        const response = await fetch(`/api/history/reminders/send-all/${reminderType}`, {
+        const response = await safeFetch(`/api/history/reminders/send-all/${reminderType}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ invoice_ids: invoiceIds })
@@ -2639,7 +2565,7 @@ async function deleteFromHistory(id) {
     }
 
     try {
-        const response = await fetch(`/api/history/${encodeURIComponent(id)}`, {
+        const response = await safeFetch(`/api/history/${encodeURIComponent(id)}`, {
             method: 'DELETE'
         });
 
@@ -2744,7 +2670,7 @@ document.getElementById('btn-bulk-info')?.addEventListener('click', async () => 
     if (ids.length === 0) return;
 
     try {
-        const response = await fetch('/api/history/bulk-info', {
+        const response = await safeFetch('/api/history/bulk-info', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ ids })
@@ -2837,7 +2763,7 @@ document.getElementById('btn-bulk-download')?.addEventListener('click', async ()
     try {
         showToast('Préparation du téléchargement...', 'info');
 
-        const response = await fetch('/api/history/bulk-download', {
+        const response = await safeFetch('/api/history/bulk-download', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ ids })
@@ -2870,7 +2796,7 @@ document.getElementById('btn-bulk-paid')?.addEventListener('click', async () => 
     if (!confirm(`Marquer ${ids.length} facture(s) comme payée(s) ?`)) return;
 
     try {
-        const response = await fetch('/api/history/bulk-payment', {
+        const response = await safeFetch('/api/history/bulk-payment', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ ids, status: 'paid' })
@@ -2896,7 +2822,7 @@ document.getElementById('btn-bulk-unpaid')?.addEventListener('click', async () =
     if (!confirm(`Marquer ${ids.length} facture(s) comme impayée(s) ?`)) return;
 
     try {
-        const response = await fetch('/api/history/bulk-payment', {
+        const response = await safeFetch('/api/history/bulk-payment', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ ids, status: 'pending' })
@@ -2922,7 +2848,7 @@ document.getElementById('btn-bulk-delete')?.addEventListener('click', async () =
     if (!confirm(`Supprimer définitivement ${ids.length} facture(s) de l'historique ?`)) return;
 
     try {
-        const response = await fetch('/api/history/bulk-delete', {
+        const response = await safeFetch('/api/history/bulk-delete', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ ids })
@@ -2951,7 +2877,7 @@ async function bulkSendReminder(reminderType) {
     try {
         showToast('Envoi des relances en cours...', 'info');
 
-        const response = await fetch('/api/history/bulk-reminder', {
+        const response = await safeFetch('/api/history/bulk-reminder', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ ids, reminder_type: reminderType })
@@ -3097,7 +3023,7 @@ async function loadUsers() {
     if (!window.currentUser || !window.currentUser.isAdmin) return;
 
     try {
-        const response = await fetch('/api/users');
+        const response = await safeFetch('/api/users');
         const data = await response.json();
 
         if (data.success) {
@@ -3133,13 +3059,13 @@ function renderUsers() {
             <td>
                 <div class="user-actions">
                     ${user.role !== 'super_admin' || window.currentUser.isSuperAdmin ? `
-                        <button class="btn-edit-user" data-id="${user._id}">Modifier</button>
+                        <button class="btn-edit-user" data-action="edit-user" data-id="${user._id}">Modifier</button>
                         ${user._id !== window.currentUser.id && user.role !== 'super_admin' ? `
-                            <button class="btn-delete-user" data-id="${user._id}">Supprimer</button>
+                            <button class="btn-delete-user" data-action="delete-user" data-id="${user._id}">Supprimer</button>
                         ` : ''}
                     ` : ''}
                     ${window.currentUser.isSuperAdmin && user._id !== window.currentUser.id && !window.currentUser.isImpersonating ? `
-                        <button class="btn-impersonate" data-id="${user._id}" data-name="${escapeHtml(user.name || user.email)}">
+                        <button class="btn-impersonate" data-action="impersonate" data-id="${user._id}" data-name="${escapeHtml(user.name || user.email)}">
                             Accéder
                         </button>
                     ` : ''}
@@ -3148,19 +3074,7 @@ function renderUsers() {
         </tr>
     `).join('');
 
-    // Add event listeners
-    usersList.querySelectorAll('.btn-edit-user').forEach(btn => {
-        btn.addEventListener('click', () => editUser(btn.dataset.id));
-    });
-
-    usersList.querySelectorAll('.btn-delete-user').forEach(btn => {
-        btn.addEventListener('click', () => deleteUser(btn.dataset.id));
-    });
-
-    // Impersonate buttons
-    usersList.querySelectorAll('.btn-impersonate').forEach(btn => {
-        btn.addEventListener('click', () => impersonateUser(btn.dataset.id, btn.dataset.name));
-    });
+    // Event listeners handled by delegation (see setupUsersDelegation)
 }
 
 function openUserModal(user = null) {
@@ -3302,7 +3216,7 @@ async function deleteUser(userId) {
     if (!confirm('Êtes-vous sûr de vouloir supprimer cet utilisateur ?')) return;
 
     try {
-        const response = await fetch(`/api/users/${userId}`, {
+        const response = await safeFetch(`/api/users/${userId}`, {
             method: 'DELETE'
         });
 
@@ -3327,7 +3241,7 @@ async function changeMyPassword(e) {
     const newPassword = document.getElementById('new-password').value;
 
     try {
-        const response = await fetch('/api/me/password', {
+        const response = await safeFetch('/api/me/password', {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ current_password: currentPassword, new_password: newPassword })
@@ -3375,7 +3289,7 @@ async function impersonateUser(userId, userName) {
     }
 
     try {
-        const response = await fetch(`/api/users/${userId}/impersonate`, {
+        const response = await safeFetch(`/api/users/${userId}/impersonate`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' }
         });
@@ -3397,7 +3311,7 @@ async function impersonateUser(userId, userName) {
 
 async function stopImpersonation() {
     try {
-        const response = await fetch('/api/stop-impersonate', {
+        const response = await safeFetch('/api/stop-impersonate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' }
         });
@@ -3478,7 +3392,7 @@ async function loadDebugFiles() {
     container.innerHTML = '<p>Chargement...</p>';
 
     try {
-        const response = await fetch('/api/debug/files');
+        const response = await safeFetch('/api/debug/files');
         const data = await response.json();
 
         let html = '';
@@ -3539,34 +3453,7 @@ async function loadDebugFiles() {
 
         container.innerHTML = html;
 
-        // Group checkbox → sélectionne tous les fichiers du groupe
-        container.querySelectorAll('.debug-group-cb').forEach(cb => {
-            cb.addEventListener('change', () => {
-                const folder = cb.dataset.folder;
-                const group = cb.dataset.group;
-                const prefix = group === '.' ? '' : group + '/';
-                container.querySelectorAll(`.debug-file-cb[data-folder="${folder}"]`).forEach(fcb => {
-                    if (group === '.' ? !fcb.dataset.path.includes('/') : fcb.dataset.path.startsWith(prefix)) {
-                        fcb.checked = cb.checked;
-                    }
-                });
-                updateDebugDeleteBtn();
-            });
-        });
-
-        container.querySelectorAll('.debug-file-cb').forEach(cb => {
-            cb.addEventListener('change', updateDebugDeleteBtn);
-        });
-
-        // Toggle collapse/expand
-        container.querySelectorAll('.debug-toggle').forEach(toggle => {
-            toggle.addEventListener('click', () => {
-                const target = document.getElementById(toggle.dataset.target);
-                if (!target) return;
-                const isCollapsed = target.classList.toggle('collapsed');
-                toggle.classList.toggle('collapsed', isCollapsed);
-            });
-        });
+        // Event listeners handled by delegation (see setupDebugDelegation)
 
     } catch (error) {
         container.innerHTML = `<p class="debug-empty">Erreur: ${escapeHtml(error.message)}</p>`;
@@ -3615,7 +3502,7 @@ document.getElementById('btn-debug-delete')?.addEventListener('click', async () 
     btn.textContent = 'Suppression...';
 
     try {
-        const response = await fetch('/api/debug/files', {
+        const response = await safeFetch('/api/debug/files', {
             method: 'DELETE',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ items })
@@ -3637,3 +3524,105 @@ document.getElementById('btn-debug-delete')?.addEventListener('click', async () 
         updateDebugDeleteBtn();
     }
 });
+
+// ==========================================================================
+// Event Delegation (attached once, handles all dynamic elements)
+// ==========================================================================
+
+// Shippers list delegation
+function setupShippersDelegation() {
+    const el = document.getElementById('shippers-list');
+    if (!el) return;
+    el.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-action="configure-client"]');
+        if (btn) openClientConfigFromPreview(btn.dataset.shipperKey);
+    });
+}
+setupShippersDelegation();
+
+// Clients grid delegation
+function setupClientsDelegation() {
+    if (!clientsGrid) return;
+    clientsGrid.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-action]');
+        if (!btn) return;
+        const action = btn.dataset.action;
+        const key = btn.dataset.key ? decodeURIComponent(btn.dataset.key) : null;
+        if (action === 'edit') editClient(key);
+        else if (action === 'delete') deleteClient(key);
+        else if (action === 'create-account') openCreateAccountModal(btn.dataset.clientKey);
+    });
+    clientsGrid.addEventListener('change', (e) => {
+        if (e.target.classList.contains('client-checkbox')) updateClientsBulkActionsBar();
+    });
+}
+setupClientsDelegation();
+
+// History tbody delegation
+function setupHistoryDelegation() {
+    const tbody = document.getElementById('history-tbody');
+    if (!tbody) return;
+    tbody.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-action]');
+        if (!btn) return;
+        const action = btn.dataset.action;
+        const id = btn.dataset.id ? decodeURIComponent(btn.dataset.id) : null;
+        if (action === 'preview-invoice') previewInvoiceFromHistory(id);
+        else if (action === 'preview-detail') previewDetailFromHistory(id);
+        else if (action === 'upload-pdf') openReuploadModal(id);
+        else if (action === 'download') downloadFromHistory(id);
+        else if (action === 'delete-history') deleteFromHistory(id);
+        else if (action === 'toggle-payment') togglePaymentStatus(id);
+        else if (action === 'send-reminder') sendSingleReminder(id, parseInt(btn.dataset.type));
+    });
+    tbody.addEventListener('change', (e) => {
+        if (e.target.classList.contains('history-checkbox')) updateBulkActionsBar();
+    });
+}
+setupHistoryDelegation();
+
+// Users list delegation
+function setupUsersDelegation() {
+    const usersList = document.getElementById('users-list');
+    if (!usersList) return;
+    usersList.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-action]');
+        if (!btn) return;
+        const action = btn.dataset.action;
+        const id = btn.dataset.id;
+        if (action === 'edit-user') editUser(id);
+        else if (action === 'delete-user') deleteUser(id);
+        else if (action === 'impersonate') impersonateUser(id, btn.dataset.name);
+    });
+}
+setupUsersDelegation();
+
+// Debug files delegation
+function setupDebugDelegation() {
+    const container = document.getElementById('debug-folders');
+    if (!container) return;
+    container.addEventListener('change', (e) => {
+        if (e.target.classList.contains('debug-group-cb')) {
+            const folder = e.target.dataset.folder;
+            const group = e.target.dataset.group;
+            const prefix = group === '.' ? '' : group + '/';
+            container.querySelectorAll(`.debug-file-cb[data-folder="${folder}"]`).forEach(fcb => {
+                if (group === '.' ? !fcb.dataset.path.includes('/') : fcb.dataset.path.startsWith(prefix)) {
+                    fcb.checked = e.target.checked;
+                }
+            });
+            updateDebugDeleteBtn();
+        } else if (e.target.classList.contains('debug-file-cb')) {
+            updateDebugDeleteBtn();
+        }
+    });
+    container.addEventListener('click', (e) => {
+        const toggle = e.target.closest('.debug-toggle');
+        if (!toggle) return;
+        const target = document.getElementById(toggle.dataset.target);
+        if (!target) return;
+        const isCollapsed = target.classList.toggle('collapsed');
+        toggle.classList.toggle('collapsed', isCollapsed);
+    });
+}
+setupDebugDelegation();
