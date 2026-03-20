@@ -354,10 +354,6 @@ def init_invoice_counter(prefix):
     À appeler une seule fois lors de la migration, ou automatiquement
     si le compteur n'existe pas encore.
     """
-    existing = counters_collection.find_one({'_id': f'invoice_seq_{prefix}'})
-    if existing:
-        return existing['seq']
-
     # Scanner l'historique pour trouver le max existant
     max_seq = 0
     for inv in invoice_history_collection.find({}, {'invoice_number': 1}):
@@ -372,8 +368,26 @@ def init_invoice_counter(prefix):
                 except ValueError:
                     pass
 
-    counters_collection.insert_one({'_id': f'invoice_seq_{prefix}', 'seq': max_seq})
-    logger.info(f"Compteur initialisé pour {prefix}: seq={max_seq}")
+    # Upsert atomique : crée le compteur s'il n'existe pas, sinon ne touche pas
+    result = counters_collection.find_one_and_update(
+        {'_id': f'invoice_seq_{prefix}', 'seq': {'$lt': max_seq}},
+        {'$set': {'seq': max_seq}},
+        upsert=False,
+        return_document=True
+    )
+    if not result:
+        # Le compteur n'existe pas ou est déjà >= max_seq
+        existing = counters_collection.find_one({'_id': f'invoice_seq_{prefix}'})
+        if existing:
+            return existing['seq']
+        try:
+            counters_collection.insert_one({'_id': f'invoice_seq_{prefix}', 'seq': max_seq})
+            logger.info(f"Compteur initialisé pour {prefix}: seq={max_seq}")
+        except Exception:
+            # Un autre processus l'a créé entre-temps
+            existing = counters_collection.find_one({'_id': f'invoice_seq_{prefix}'})
+            if existing:
+                return existing['seq']
     return max_seq
 
 
@@ -657,14 +671,13 @@ def get_client_info(shipper_name, clients_config, csv_siret=None):
     """
     # 1. PRIORITÉ: Matching par SIRET (100% exact)
     if csv_siret:
-        # Nettoyer le SIRET (garder uniquement les chiffres)
-        clean_siret = ''.join(c for c in str(csv_siret) if c.isdigit())
-        if len(clean_siret) >= 9:  # SIREN minimum 9 chiffres, SIRET 14
+        cleaned = clean_siret(csv_siret)
+        if len(cleaned) >= 9:  # SIREN minimum 9 chiffres, SIRET 14
             # Chercher dans le cache local
             for client_name, client_data in clients_config.items():
-                client_siret = ''.join(c for c in str(client_data.get('siret', '')) if c.isdigit())
-                if client_siret and client_siret == clean_siret:
-                    print(f"✓ Client SIRET match: '{shipper_name}' → '{client_name}' (SIRET: {clean_siret})")
+                client_siret_val = clean_siret(client_data.get('siret', ''))
+                if client_siret_val and client_siret_val == cleaned:
+                    print(f"✓ Client SIRET match: '{shipper_name}' → '{client_name}' (SIRET: {cleaned})")
                     return client_data
 
             # Note: pas de requête MongoDB supplémentaire, clients_config contient déjà tous les clients
@@ -812,6 +825,31 @@ def sanitize_string(value, max_length=500):
     if not isinstance(value, str):
         return ''
     return value.strip()[:max_length]
+
+
+def calculate_total_ht(rows):
+    """Calcule le total HT à partir des lignes CSV"""
+    return sum(
+        float(row.get('Prix', '0').replace(',', '.') or '0') *
+        int(float(row.get('Quantité', '1').replace(',', '.') or '1'))
+        for row in rows
+    )
+
+
+def clean_siret(siret):
+    """Nettoie un SIRET en ne gardant que les chiffres"""
+    if not siret:
+        return ''
+    return ''.join(c for c in str(siret) if c.isdigit())
+
+
+def extract_period(rows):
+    """Extrait la période de facturation depuis les lignes CSV"""
+    if not rows:
+        return ''
+    start_date = rows[0].get('Invoice Staring date', '')
+    end_date = rows[0].get('Invoice Ending date', '')
+    return f"du {start_date} au {end_date}" if start_date and end_date else ''
 
 
 # =============================================================================
@@ -1130,6 +1168,9 @@ def init_db_indexes():
         invoice_history_collection.create_index([('email_sent', 1), ('id', 1)])
         invoice_history_collection.create_index([('payment_status', 1), ('created_at', -1)])
         invoice_history_collection.create_index([('shipper', 1), ('created_at', -1)])
+        # Index pour la détection de doublons (shipper+période et SIRET+période)
+        invoice_history_collection.create_index([('shipper', 1), ('period', 1)])
+        invoice_history_collection.create_index([('client_siret', 1), ('period', 1)])
 
         # Index sur users
         users_collection.create_index('email', unique=True)
@@ -2252,11 +2293,7 @@ def upload_csv():
             client_info = get_client_info(shipper_name, clients_config, csv_siret=csv_siret)
 
             # Calculer le total estimé
-            total_ht = sum(
-                float(row.get('Prix', '0').replace(',', '.') or '0') *
-                int(float(row.get('Quantité', '1').replace(',', '.') or '1'))
-                for row in rows
-            )
+            total_ht = calculate_total_ht(rows)
 
             # Vérifier si le client est configuré (SIRET valide ET email valide)
             siret = client_info.get('siret', '00000000000000')
@@ -2266,16 +2303,13 @@ def upload_csv():
             # Utiliser le nom du client en base (pas le nom CSV avec "via PP")
             display_name = client_info.get('nom', shipper_name)
 
-            # Extraire la période depuis le CSV
-            start_date = rows[0].get('Invoice Staring date', '') if rows else ''
-            end_date = rows[0].get('Invoice Ending date', '') if rows else ''
-            period = f"du {start_date} au {end_date}" if start_date and end_date else ''
+            period = extract_period(rows)
 
             # Vérifier si une facture existe déjà pour ce client/période
             # Recherche par SIRET + période (prioritaire), puis par nom + période en fallback
             already_invoiced = False
             existing_invoice = None
-            clean_siret_check = ''.join(c for c in str(siret) if c.isdigit()) if siret else ''
+            clean_siret_check = clean_siret(siret)
             if period and invoice_history_collection is not None:
                 query_conditions = []
                 if clean_siret_check and clean_siret_check != '00000000000000':
@@ -2344,11 +2378,7 @@ def refresh_preview(file_id):
             client_info = get_client_info(shipper_name, clients_config, csv_siret=csv_siret)
 
             # Calculer le total estimé
-            total_ht = sum(
-                float(row.get('Prix', '0').replace(',', '.') or '0') *
-                int(float(row.get('Quantité', '1').replace(',', '.') or '1'))
-                for row in rows
-            )
+            total_ht = calculate_total_ht(rows)
 
             # Vérifier si le client est configuré
             siret = client_info.get('siret', '00000000000000')
@@ -2358,16 +2388,13 @@ def refresh_preview(file_id):
             # Utiliser le nom de la base de données (sans "via PP") au lieu du nom CSV
             display_name = client_info.get('nom', shipper_name)
 
-            # Extraire la période depuis le CSV
-            start_date = rows[0].get('Invoice Staring date', '') if rows else ''
-            end_date = rows[0].get('Invoice Ending date', '') if rows else ''
-            period = f"du {start_date} au {end_date}" if start_date and end_date else ''
+            period = extract_period(rows)
 
             # Vérifier si une facture existe déjà pour ce client/période
             # Recherche par SIRET + période (prioritaire), puis par nom + période en fallback
             already_invoiced = False
             existing_invoice = None
-            clean_siret_check = ''.join(c for c in str(siret) if c.isdigit()) if siret else ''
+            clean_siret_check = clean_siret(siret)
             if period and invoice_history_collection is not None:
                 query_conditions = []
                 if clean_siret_check and clean_siret_check != '00000000000000':
@@ -2457,13 +2484,11 @@ def generate_invoices():
         for idx, (shipper_name, rows) in enumerate(shippers_to_process):
             try:
                 csv_siret = rows[0].get('SIRET', '') if rows else ''
-                clean_siret = ''.join(c for c in str(csv_siret) if c.isdigit()) if csv_siret else ''
+                cleaned_siret = clean_siret(csv_siret)
                 client_info = get_client_info(shipper_name, clients_config, csv_siret=csv_siret)
                 invoice_number = generate_invoice_number(prefix, sequence=first_number + idx)
 
-                start_date = rows[0].get('Invoice Staring date', '') if rows else ''
-                end_date = rows[0].get('Invoice Ending date', '') if rows else ''
-                period = f"du {start_date} au {end_date}" if start_date and end_date else ''
+                period = extract_period(rows)
 
                 filepath_pdf, total_ttc = generator.generate_invoice(
                     shipper_name, rows, client_info, invoice_number
@@ -2487,10 +2512,10 @@ def generate_invoices():
                 due_date = next_month - timedelta(days=1)
 
                 detail_filename = None
-                if clean_siret and clean_siret in details_by_siret:
+                if cleaned_siret and cleaned_siret in details_by_siret:
                     detail_filename = f"detail_{invoice_number}.csv"
                     detail_csv_path = os.path.join(batch_folder, detail_filename)
-                    save_detail_csv(details_by_siret[clean_siret], detail_csv_path)
+                    save_detail_csv(details_by_siret[cleaned_siret], detail_csv_path)
 
                 invoice_data = {
                     'shipper': shipper_name,
@@ -2507,7 +2532,7 @@ def generate_invoices():
                     'email_sent': False,
                     'emission_date': emission_date.isoformat(),
                     'due_date': due_date.isoformat(),
-                    'client_siret': clean_siret,
+                    'client_siret': cleaned_siret,
                     'detail_filename': detail_filename,
                     'has_detail': bool(detail_filename)
                 }
