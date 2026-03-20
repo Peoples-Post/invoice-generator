@@ -30,6 +30,15 @@ let selectedDetailsFile = null;
 let shippersData = [];
 let invoicesData = [];
 
+// Guard against concurrent operations
+const pendingOps = new Set();
+function guardOp(key) {
+    if (pendingOps.has(key)) return false;
+    pendingOps.add(key);
+    return true;
+}
+function releaseOp(key) { pendingOps.delete(key); }
+
 // DOM Elements
 const uploadZone = document.getElementById('upload-zone');
 const fileInput = document.getElementById('file-input');
@@ -320,7 +329,7 @@ function fetchNextInvoiceNumber() {
                 updateInvoicePreview();
             }
         })
-        .catch(() => {});
+        .catch(err => console.warn('fetchNextInvoiceNumber:', err.message));
 }
 
 const debouncedInvoiceUpdate = debounce(() => { updateInvoicePreview(); fetchNextInvoiceNumber(); }, 300);
@@ -333,6 +342,7 @@ document.getElementById('invoice-start').addEventListener('input', updateInvoice
 // ==========================================================================
 
 document.getElementById('btn-generate').addEventListener('click', async () => {
+    if (!guardOp('generate')) return;
     const prefixBase = document.getElementById('invoice-prefix').value || 'PP';
     const year = document.getElementById('invoice-year').value || new Date().getFullYear();
     const prefix = `${prefixBase}-${year}-`;
@@ -454,6 +464,7 @@ document.getElementById('btn-generate').addEventListener('click', async () => {
     } catch (error) {
         showToast(error.message, 'error');
     } finally {
+        releaseOp('generate');
         resetBtn();
     }
 });
@@ -620,6 +631,7 @@ window.sendSingleEmail = async function(invoiceNumber, btn) {
 };
 
 document.getElementById('btn-send-all-emails').addEventListener('click', async () => {
+    if (!guardOp('send-emails')) return;
     const btn = document.getElementById('btn-send-all-emails');
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner"></span> Envoi en cours...';
@@ -649,6 +661,7 @@ document.getElementById('btn-send-all-emails').addEventListener('click', async (
     } catch (error) {
         showToast('Erreur lors de l\'envoi', 'error');
     } finally {
+        releaseOp('send-emails');
         btn.disabled = false;
         btn.innerHTML = `
             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
