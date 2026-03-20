@@ -3051,10 +3051,49 @@ def get_invoice_history():
     })
 
 
+def cleanup_invoice_files(invoices):
+    """Supprime les fichiers PDF/détail des factures et les dossiers batch vides"""
+    batch_dirs_to_check = set()
+    for inv in invoices:
+        batch_id = inv.get('batch_id')
+        if not batch_id:
+            continue
+        batch_folder = safe_filepath(app.config['OUTPUT_FOLDER'], f"batch_{batch_id}")
+        if not batch_folder or not os.path.isdir(batch_folder):
+            continue
+        batch_dirs_to_check.add(batch_folder)
+        # Supprimer le PDF de la facture
+        filename = inv.get('filename')
+        if filename:
+            pdf_path = safe_filepath(app.config['OUTPUT_FOLDER'], f"batch_{batch_id}", filename)
+            if pdf_path and os.path.isfile(pdf_path):
+                os.remove(pdf_path)
+        # Supprimer le PDF de détail
+        detail_filename = inv.get('detail_filename')
+        if detail_filename:
+            detail_path = safe_filepath(app.config['OUTPUT_FOLDER'], f"batch_{batch_id}", detail_filename)
+            if detail_path and os.path.isfile(detail_path):
+                os.remove(detail_path)
+
+    # Nettoyer les dossiers batch vides (ou ne contenant que batch_data.json)
+    for batch_dir in batch_dirs_to_check:
+        if not os.path.isdir(batch_dir):
+            continue
+        remaining = os.listdir(batch_dir)
+        if not remaining:
+            os.rmdir(batch_dir)
+        elif remaining == [BATCH_DATA_FILE]:
+            os.remove(os.path.join(batch_dir, BATCH_DATA_FILE))
+            os.rmdir(batch_dir)
+
+
 @app.route('/api/history/<invoice_id>', methods=['DELETE'])
 @login_required
 def delete_from_history(invoice_id):
-    """Supprime une facture de l'historique"""
+    """Supprime une facture de l'historique et ses fichiers"""
+    invoice = invoice_history_collection.find_one({'id': invoice_id})
+    if invoice:
+        cleanup_invoice_files([invoice])
     invoice_history_collection.delete_one({'id': invoice_id})
     return jsonify({'success': True})
 
@@ -3393,12 +3432,16 @@ def send_all_reminders(reminder_type):
 @app.route('/api/history/bulk-delete', methods=['POST'])
 @login_required
 def bulk_delete_from_history():
-    """Supprime plusieurs factures de l'historique"""
+    """Supprime plusieurs factures de l'historique et leurs fichiers"""
     data = request.json
     invoice_ids = data.get('ids', [])
 
     if not invoice_ids:
         return jsonify({'error': 'Aucune facture sélectionnée'}), 400
+
+    # Récupérer les factures avant suppression pour nettoyer les fichiers
+    invoices = list(invoice_history_collection.find({'id': {'$in': invoice_ids}}))
+    cleanup_invoice_files(invoices)
 
     result = invoice_history_collection.delete_many({'id': {'$in': invoice_ids}})
     deleted_count = result.deleted_count
