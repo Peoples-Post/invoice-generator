@@ -1571,6 +1571,7 @@ def add_to_invoice_history(invoice_data, batch_id):
         'client_name': invoice_data.get('company_name', invoice_data.get('shipper', '')),
         'shipper': invoice_data.get('shipper', ''),
         'total_ht': invoice_data.get('total_ht', 0),
+        'total_tva': invoice_data.get('total_tva', invoice_data.get('total_ttc', 0) - invoice_data.get('total_ht', 0)),
         'total_ttc': invoice_data.get('total_ttc', 0),
         'total_ht_formatted': invoice_data.get('total_ht_formatted', ''),
         'total_ttc_formatted': invoice_data.get('total_ttc_formatted', ''),
@@ -3220,7 +3221,10 @@ def regenerate_pdf_from_csv(invoice_id):
 @app.route('/api/history/download/<invoice_id>')
 @login_required
 def download_from_history(invoice_id):
-    """Télécharge une facture depuis l'historique"""
+    """Télécharge une facture depuis l'historique (ZIP si détail CSV existe)"""
+    import zipfile
+    from io import BytesIO
+
     history = load_invoice_history()
 
     # Trouver la facture
@@ -3236,7 +3240,29 @@ def download_from_history(invoice_id):
     if not filepath or not os.path.exists(filepath):
         return jsonify({'error': 'Fichier PDF non trouvé'}), 404
 
-    return send_file(filepath, as_attachment=True, download_name=os.path.basename(filepath))
+    # Vérifier si un fichier de détail existe
+    detail_filename = invoice.get('detail_filename')
+    detail_path = None
+    if detail_filename:
+        detail_path = safe_filepath(app.config['OUTPUT_FOLDER'], f"batch_{batch_id}", detail_filename)
+        if not detail_path or not os.path.exists(detail_path):
+            detail_path = None
+
+    # Si pas de détail, télécharger le PDF seul
+    if not detail_path:
+        return send_file(filepath, as_attachment=True, download_name=os.path.basename(filepath))
+
+    # Sinon, créer un ZIP avec PDF + détail CSV
+    zip_buffer = BytesIO()
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        zip_file.write(filepath, os.path.basename(filepath))
+        zip_file.write(detail_path, os.path.basename(detail_path))
+
+    zip_buffer.seek(0)
+    invoice_number = invoice.get('invoice_number', 'facture').replace('-', '_')
+    zip_name = f"{invoice_number}.zip"
+
+    return send_file(zip_buffer, mimetype='application/zip', as_attachment=True, download_name=zip_name)
 
 
 @app.route('/api/history/view/<invoice_id>')
@@ -3559,10 +3585,10 @@ def bulk_get_info():
 
     invoices = list(invoice_history_collection.find({'id': {'$in': invoice_ids}}))
 
-    # Calculer les totaux
+    # Calculer les totaux (total_tva déduit de ttc - ht si non stocké)
     total_ht = sum(inv.get('total_ht', 0) for inv in invoices)
-    total_tva = sum(inv.get('total_tva', 0) for inv in invoices)
     total_ttc = sum(inv.get('total_ttc', 0) for inv in invoices)
+    total_tva = sum(inv.get('total_tva', inv.get('total_ttc', 0) - inv.get('total_ht', 0)) for inv in invoices)
     paid_count = sum(1 for inv in invoices if inv.get('payment_status') == 'paid')
     unpaid_count = len(invoices) - paid_count
 
@@ -3603,7 +3629,7 @@ def bulk_download():
     if not invoices:
         return jsonify({'error': 'Aucune facture trouvée'}), 404
 
-    # Créer le ZIP en mémoire
+    # Créer le ZIP en mémoire (PDF + détail CSV si disponible)
     zip_buffer = BytesIO()
     with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
         for invoice in invoices:
@@ -3614,11 +3640,15 @@ def bulk_download():
                 continue
 
             filepath = safe_filepath(app.config['OUTPUT_FOLDER'], f"batch_{batch_id}", filename)
-            if not filepath:
-                continue
-
-            if os.path.exists(filepath):
+            if filepath and os.path.exists(filepath):
                 zip_file.write(filepath, os.path.basename(filepath))
+
+            # Inclure le détail CSV s'il existe
+            detail_filename = invoice.get('detail_filename')
+            if detail_filename:
+                detail_path = safe_filepath(app.config['OUTPUT_FOLDER'], f"batch_{batch_id}", detail_filename)
+                if detail_path and os.path.exists(detail_path):
+                    zip_file.write(detail_path, os.path.basename(detail_path))
 
     zip_buffer.seek(0)
 
