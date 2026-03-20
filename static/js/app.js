@@ -4,7 +4,7 @@
 
 // Helpers
 async function safeFetch(url, options) {
-    const response = await safeFetch(url, options);
+    const response = await fetch(url, options);
     if (!response.ok) {
         let msg = `Erreur HTTP ${response.status}`;
         try { const d = await response.clone().json(); if (d.error) msg = d.error; } catch {}
@@ -260,11 +260,11 @@ function showPreview(data) {
         // Utiliser csv_name pour le matching backend, name pour l'affichage
         // Encoder en base64 pour éviter les problèmes de caractères spéciaux
         const csvName = shipper.csv_name || shipper.name;
-        const encodedCsvName = btoa(unescape(encodeURIComponent(csvName)));
+        const encodedCsvName = encodeURIComponent(csvName);
 
         return `
             <div class="shipper-item">
-                <input type="checkbox" class="shipper-checkbox" data-shipper="${encodedCsvName}" data-shipper-raw="${escapeHtml(csvName)}" checked>
+                <input type="checkbox" class="shipper-checkbox" data-shipper="${encodedCsvName}" checked>
                 <div class="shipper-info">
                     <div class="shipper-name">${escapeHtml(shipper.name)}</div>
                     <div class="shipper-details">${shipper.lines_count} lignes${shipper.client_email && shipper.client_email !== 'email@example.com' ? ' • ' + escapeHtml(shipper.client_email) : ''}</div>
@@ -352,7 +352,7 @@ document.getElementById('btn-generate').addEventListener('click', async () => {
     const selectedShippers = [];
     document.querySelectorAll('.shipper-checkbox:checked').forEach(cb => {
         try {
-            const decoded = decodeURIComponent(escape(atob(cb.dataset.shipper)));
+            const decoded = decodeURIComponent(cb.dataset.shipper);
             selectedShippers.push(decoded);
         } catch (e) {
             // Fallback si pas encodé en base64
