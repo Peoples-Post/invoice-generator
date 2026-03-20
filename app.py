@@ -34,7 +34,7 @@ from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.exceptions import HTTPException
 from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
-from pymongo import MongoClient, ReturnDocument
+from pymongo import MongoClient, ReturnDocument, UpdateOne, DeleteOne, ReplaceOne
 
 # Flask-Limiter (optionnel)
 try:
@@ -379,8 +379,16 @@ def require_db(f):
     return decorated_function
 
 
-def load_clients_config():
-    """Charge la configuration des clients depuis MongoDB"""
+def load_clients_config(use_cache=True):
+    """Charge la configuration des clients depuis MongoDB (avec cache par requête)"""
+    if use_cache:
+        try:
+            cached = getattr(g, '_clients_config', None)
+            if cached is not None:
+                return cached
+        except RuntimeError:
+            pass  # Hors contexte de requête Flask
+
     clients = {}
     for client in clients_collection.find():
         client_name = client.pop('_id')
@@ -391,15 +399,31 @@ def load_clients_config():
             clients = load_clients_config_file()
             if clients:
                 save_clients_config(clients)
+
+    try:
+        g._clients_config = clients
+    except RuntimeError:
+        pass  # Hors contexte de requête Flask
+
     return clients
 
 
 def save_clients_config(clients):
-    """Sauvegarde la configuration des clients dans MongoDB"""
+    """Sauvegarde la configuration des clients dans MongoDB (batch)"""
+    if not clients:
+        return
+    ops = []
     for client_name, client_data in clients.items():
         client_doc = dict(client_data)
         client_doc['_id'] = client_name
-        clients_collection.replace_one({'_id': client_name}, client_doc, upsert=True)
+        ops.append(ReplaceOne({'_id': client_name}, client_doc, upsert=True))
+    if ops:
+        clients_collection.bulk_write(ops, ordered=False)
+    # Invalider le cache
+    try:
+        g._clients_config = None
+    except RuntimeError:
+        pass
 
 
 # =============================================================================
@@ -1079,6 +1103,11 @@ def init_db_indexes():
         invoice_history_collection.create_index('shipper')
         invoice_history_collection.create_index('payment_status')
         invoice_history_collection.create_index('id')
+        invoice_history_collection.create_index('email_sent')
+        # Index composites pour les requêtes combinées
+        invoice_history_collection.create_index([('email_sent', 1), ('id', 1)])
+        invoice_history_collection.create_index([('payment_status', 1), ('created_at', -1)])
+        invoice_history_collection.create_index([('shipper', 1), ('created_at', -1)])
 
         # Index sur users
         users_collection.create_index('email', unique=True)
@@ -3371,11 +3400,8 @@ def bulk_delete_from_history():
     if not invoice_ids:
         return jsonify({'error': 'Aucune facture sélectionnée'}), 400
 
-    deleted_count = 0
-    for invoice_id in invoice_ids:
-        result = invoice_history_collection.delete_one({'id': invoice_id})
-        if result.deleted_count > 0:
-            deleted_count += 1
+    result = invoice_history_collection.delete_many({'id': {'$in': invoice_ids}})
+    deleted_count = result.deleted_count
 
     return jsonify({
         'success': True,
@@ -3484,14 +3510,11 @@ def bulk_update_payment():
     if status not in ['pending', 'paid']:
         return jsonify({'error': 'Statut invalide'}), 400
 
-    updated_count = 0
-    for invoice_id in invoice_ids:
-        result = invoice_history_collection.update_one(
-            {'id': invoice_id},
-            {'$set': {'payment_status': status}}
-        )
-        if result.modified_count > 0:
-            updated_count += 1
+    result = invoice_history_collection.update_many(
+        {'id': {'$in': invoice_ids}},
+        {'$set': {'payment_status': status}}
+    )
+    updated_count = result.modified_count
 
     status_text = 'payée(s)' if status == 'paid' else 'impayée(s)'
     return jsonify({
@@ -3703,6 +3726,7 @@ def cleanup_all_duplicates():
 
     processed = set()
     total_deleted = 0
+    names_to_delete = []
 
     for i, name1 in enumerate(client_names):
         if name1 in processed:
@@ -3735,11 +3759,15 @@ def cleanup_all_duplicates():
                     best_score = score
                     best_client = name
 
-            # Supprimer les autres
+            # Collecter les doublons à supprimer
             for name in group:
                 if name != best_client:
-                    clients_collection.delete_one({'_id': name})
+                    names_to_delete.append(name)
                     total_deleted += 1
+
+    # Supprimer tous les doublons en une seule opération
+    if names_to_delete:
+        clients_collection.delete_many({'_id': {'$in': names_to_delete}})
 
     return jsonify({
         'success': True,
@@ -4054,44 +4082,59 @@ def import_clients():
             'errors': []
         }
 
-        # Importer les nouveaux clients
-        for client_data in new_clients:
+        # Importer les nouveaux clients (batch)
+        if new_clients:
+            ops = [ReplaceOne({'_id': c['_id']}, c, upsert=True) for c in new_clients]
             try:
-                clients_collection.replace_one({'_id': client_data['_id']}, client_data, upsert=True)
-                results['created'] += 1
+                bulk_result = clients_collection.bulk_write(ops, ordered=False)
+                results['created'] += bulk_result.upserted_count + bulk_result.modified_count
             except Exception as e:
-                results['errors'].append({'nom': client_data['nom'], 'error': str(e)})
+                results['errors'].append({'nom': 'batch', 'error': str(e)})
 
-        # Traiter les doublons selon les décisions
+        # Traiter les doublons selon les décisions (batch)
+        dup_ops = []
         for dup in duplicates:
             nom = dup['nom']
-            existing_key = dup.get('existing_key', nom)  # Utiliser la clé existante si disponible
-            decision = decisions.get(nom, 'skip')  # Par défaut: ignorer
+            existing_key = dup.get('existing_key', nom)
+            decision = decisions.get(nom, 'skip')
 
             if decision == 'add':
-                # Ajouter comme nouveau (avec le nom de l'import)
                 client_data = dup['new_data'].copy()
+                dup_ops.append(('add', nom, client_data))
+            elif decision == 'update':
+                update_data = dup['new_data'].copy()
+                update_data['_id'] = existing_key
+                dup_ops.append(('update', nom, update_data, existing_key))
+
+        # Exécuter les opérations de doublons en batch
+        update_ops = []
+        for op in dup_ops:
+            if op[0] == 'update':
+                _, nom, update_data, existing_key = op
+                update_ops.append(ReplaceOne({'_id': existing_key}, update_data, upsert=True))
+                results['updated'] += 1
+
+        # Les 'add' doivent rester individuels (gestion de conflit avec suffixe)
+        for op in dup_ops:
+            if op[0] == 'add':
+                _, nom, client_data = op
                 try:
                     clients_collection.insert_one(client_data)
                     results['created'] += 1
-                except:
-                    # Si le nom existe déjà, ajouter un suffixe
+                except Exception:
                     client_data['_id'] = f"{nom} (import)"
                     client_data['nom'] = f"{nom} (import)"
                     try:
                         clients_collection.insert_one(client_data)
                         results['created'] += 1
-                    except:
+                    except Exception:
                         results['skipped'] += 1
-            elif decision == 'update':
-                # Mettre à jour l'existant (utiliser la clé existante, pas le nom importé)
-                try:
-                    update_data = dup['new_data'].copy()
-                    update_data['_id'] = existing_key  # Garder la clé existante
-                    clients_collection.replace_one({'_id': existing_key}, update_data, upsert=True)
-                    results['updated'] += 1
-                except Exception as e:
-                    results['errors'].append({'nom': nom, 'error': str(e)})
+
+        if update_ops:
+            try:
+                clients_collection.bulk_write(update_ops, ordered=False)
+            except Exception as e:
+                results['errors'].append({'nom': 'batch_update', 'error': str(e)})
             else:  # skip
                 results['skipped'] += 1
 
