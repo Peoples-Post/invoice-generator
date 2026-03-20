@@ -2266,13 +2266,39 @@ def upload_csv():
             # Utiliser le nom du client en base (pas le nom CSV avec "via PP")
             display_name = client_info.get('nom', shipper_name)
 
+            # Extraire la période depuis le CSV
+            start_date = rows[0].get('Invoice Staring date', '') if rows else ''
+            end_date = rows[0].get('Invoice Ending date', '') if rows else ''
+            period = f"du {start_date} au {end_date}" if start_date and end_date else ''
+
+            # Vérifier si une facture existe déjà pour ce client/période
+            # Recherche par SIRET + période (prioritaire), puis par nom + période en fallback
+            already_invoiced = False
+            existing_invoice = None
+            clean_siret_check = ''.join(c for c in str(siret) if c.isdigit()) if siret else ''
+            if period and invoice_history_collection is not None:
+                query_conditions = []
+                if clean_siret_check and clean_siret_check != '00000000000000':
+                    query_conditions.append({'client_siret': clean_siret_check, 'period': period})
+                query_conditions.append({'shipper': shipper_name, 'period': period})
+
+                for query in query_conditions:
+                    existing = invoice_history_collection.find_one(query)
+                    if existing:
+                        already_invoiced = True
+                        existing_invoice = existing.get('invoice_number', '')
+                        break
+
             shippers_summary.append({
                 'name': display_name,
                 'csv_name': shipper_name,
                 'lines_count': len(rows),
                 'total_ht': round(total_ht, 2),
                 'client_configured': is_configured,
-                'client_email': email if email != 'email@example.com' else ''
+                'client_email': email if email != 'email@example.com' else '',
+                'period': period,
+                'already_invoiced': already_invoiced,
+                'existing_invoice': existing_invoice
             })
 
         save_clients_config(clients_config)
@@ -2332,13 +2358,39 @@ def refresh_preview(file_id):
             # Utiliser le nom de la base de données (sans "via PP") au lieu du nom CSV
             display_name = client_info.get('nom', shipper_name)
 
+            # Extraire la période depuis le CSV
+            start_date = rows[0].get('Invoice Staring date', '') if rows else ''
+            end_date = rows[0].get('Invoice Ending date', '') if rows else ''
+            period = f"du {start_date} au {end_date}" if start_date and end_date else ''
+
+            # Vérifier si une facture existe déjà pour ce client/période
+            # Recherche par SIRET + période (prioritaire), puis par nom + période en fallback
+            already_invoiced = False
+            existing_invoice = None
+            clean_siret_check = ''.join(c for c in str(siret) if c.isdigit()) if siret else ''
+            if period and invoice_history_collection is not None:
+                query_conditions = []
+                if clean_siret_check and clean_siret_check != '00000000000000':
+                    query_conditions.append({'client_siret': clean_siret_check, 'period': period})
+                query_conditions.append({'shipper': shipper_name, 'period': period})
+
+                for query in query_conditions:
+                    existing = invoice_history_collection.find_one(query)
+                    if existing:
+                        already_invoiced = True
+                        existing_invoice = existing.get('invoice_number', '')
+                        break
+
             shippers_summary.append({
                 'name': display_name,
                 'csv_name': shipper_name,
                 'lines_count': len(rows),
                 'total_ht': round(total_ht, 2),
                 'client_configured': is_configured,
-                'client_email': email if email != 'email@example.com' else ''
+                'client_email': email if email != 'email@example.com' else '',
+                'period': period,
+                'already_invoiced': already_invoiced,
+                'existing_invoice': existing_invoice
             })
 
         return jsonify({

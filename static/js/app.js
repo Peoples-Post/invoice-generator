@@ -266,10 +266,14 @@ function showPreview(data) {
     `;
 
     // Update shippers list
+    const duplicateCount = data.shippers.filter(s => s.already_invoiced).length;
     shippersList.innerHTML = data.shippers.map(shipper => {
         const isConfigured = shipper.client_configured;
-        const statusClass = isConfigured ? 'configured' : 'missing clickable';
-        const statusText = isConfigured ? '✓ Configuré' : '⚠ À configurer';
+        const isDuplicate = shipper.already_invoiced;
+        const statusClass = isDuplicate ? 'duplicate' : (isConfigured ? 'configured' : 'missing clickable');
+        const statusText = isDuplicate
+            ? `⚠ Déjà facturé (${escapeHtml(shipper.existing_invoice)})`
+            : (isConfigured ? '✓ Configuré' : '⚠ À configurer');
         const safeShipperName = encodeURIComponent(shipper.name);
         // Utiliser csv_name pour le matching backend, name pour l'affichage
         // Encoder en base64 pour éviter les problèmes de caractères spéciaux
@@ -277,19 +281,24 @@ function showPreview(data) {
         const encodedCsvName = encodeURIComponent(csvName);
 
         return `
-            <div class="shipper-item">
-                <input type="checkbox" class="shipper-checkbox" data-shipper="${encodedCsvName}" ${isConfigured ? 'checked' : 'disabled title="Informations client incomplètes"'}>
+            <div class="shipper-item ${isDuplicate ? 'shipper-duplicate' : ''}">
+                <input type="checkbox" class="shipper-checkbox" data-shipper="${encodedCsvName}" ${!isConfigured ? 'disabled title="Informations client incomplètes"' : isDuplicate ? 'title="Facture déjà générée pour cette période — cocher pour forcer"' : 'checked'}>
                 <div class="shipper-info">
                     <div class="shipper-name">${escapeHtml(shipper.name)}</div>
-                    <div class="shipper-details">${shipper.lines_count} lignes${shipper.client_email && shipper.client_email !== 'email@example.com' ? ' • ' + escapeHtml(shipper.client_email) : ''}</div>
+                    <div class="shipper-details">${shipper.lines_count} lignes${shipper.client_email && shipper.client_email !== 'email@example.com' ? ' • ' + escapeHtml(shipper.client_email) : ''}${shipper.period ? ' • ' + escapeHtml(shipper.period) : ''}</div>
                 </div>
-                <div class="shipper-status ${statusClass}" ${!isConfigured ? `data-action="configure-client" data-shipper-key="${safeShipperName}"` : ''}>
+                <div class="shipper-status ${statusClass}" ${!isConfigured && !isDuplicate ? `data-action="configure-client" data-shipper-key="${safeShipperName}"` : ''}>
                     ${statusText}
                 </div>
                 <div class="shipper-total">${formatCurrency(shipper.total_ht)} HT</div>
             </div>
         `;
     }).join('');
+
+    // Alerte globale si des doublons sont détectés
+    if (duplicateCount > 0) {
+        showToast(`${duplicateCount} client(s) déjà facturé(s) pour cette période — décochés automatiquement`, 'warning');
+    }
 
     // Event listeners handled by delegation (see setupShippersDelegation)
 
@@ -377,6 +386,18 @@ document.getElementById('btn-generate').addEventListener('click', async () => {
     if (selectedShippers.length === 0) {
         showToast('Veuillez sélectionner au moins un client', 'error');
         return;
+    }
+
+    // Vérifier si des doublons sont sélectionnés
+    const selectedDuplicates = shippersData.filter(s =>
+        s.already_invoiced && selectedShippers.includes(s.csv_name || s.name)
+    );
+    if (selectedDuplicates.length > 0) {
+        const dupList = selectedDuplicates.map(s => `  • ${s.name} → ${s.existing_invoice}`).join('\n');
+        if (!confirm(`⚠️ ${selectedDuplicates.length} client(s) ont déjà une facture pour cette période :\n\n${dupList}\n\nVoulez-vous quand même générer ces factures en doublon ?`)) {
+            releaseOp('generate');
+            return;
+        }
     }
 
     const btn = document.getElementById('btn-generate');

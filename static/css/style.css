@@ -475,6 +475,15 @@ a:hover {
     color: var(--color-warning);
 }
 
+.shipper-status.duplicate {
+    background-color: var(--color-danger-light, #fef2f2);
+    color: var(--color-danger, #ef4444);
+}
+
+.shipper-item.shipper-duplicate {
+    opacity: 0.6;
+}
+
 .shipper-total {
     font-family: var(--font-heading);
     font-weight: 600;
