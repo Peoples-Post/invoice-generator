@@ -50,7 +50,7 @@ const tabCache = {
 };
 
 function reloadClients() { tabCache.invalidate('clients'); loadClients(); }
-function reloadHistory(search, page) { tabCache.invalidate('history'); loadHistory(search, page); }
+function reloadHistory(search) { tabCache.invalidate('history'); historyData = []; historyPage = 0; historyHasMore = true; loadHistory(search); }
 function reloadUsers() { tabCache.invalidate('users'); loadUsers(); }
 
 // DOM Elements
@@ -2086,95 +2086,73 @@ document.getElementById('btn-clients-bulk-delete')?.addEventListener('click', as
 
 let historyData = [];
 let historyFilter = 'all';
-let historyPage = 1;
-let historyTotalPages = 1;
+let historyPage = 0;
+let historyHasMore = true;
 let historyTotal = 0;
+let historyLoading = false;
 const HISTORY_PER_PAGE = 50;
 
-async function loadHistory(search = '', page = 1) {
+async function loadHistory(search = '', append = false) {
+    if (historyLoading) return;
+    if (append && !historyHasMore) return;
+
+    historyLoading = true;
+    const nextPage = append ? historyPage + 1 : 1;
+    showHistoryLoader(true);
+
     try {
-        const params = new URLSearchParams({ page, per_page: HISTORY_PER_PAGE });
+        const params = new URLSearchParams({ page: nextPage, per_page: HISTORY_PER_PAGE });
         if (search) params.set('search', search);
         const response = await safeFetch(`/api/history?${params}`);
         const data = await response.json();
 
         if (data.success) {
-            historyData = data.history;
             historyPage = data.page;
-            historyTotalPages = data.total_pages;
             historyTotal = data.total;
-            applyHistoryFilter();
-            renderHistoryPagination();
+            historyHasMore = data.page < data.total_pages;
+
+            if (append) {
+                historyData = historyData.concat(data.history);
+                applyHistoryFilter(append, data.history);
+            } else {
+                historyData = data.history;
+                applyHistoryFilter(false);
+            }
             tabCache.touch('history');
         }
     } catch (error) {
         showToast('Erreur lors du chargement de l\'historique', 'error');
+    } finally {
+        historyLoading = false;
+        showHistoryLoader(false);
     }
 }
 
-function applyHistoryFilter() {
-    let filtered = historyData;
+function showHistoryLoader(show) {
+    const loader = document.getElementById('history-scroll-loader');
+    if (loader) loader.classList.toggle('hidden', !show);
+}
+
+function applyHistoryFilter(append = false, newItems = null) {
+    const source = append && newItems ? newItems : historyData;
+    let filtered = source;
 
     if (historyFilter === 'pending') {
-        filtered = historyData.filter(inv => inv.payment_status !== 'paid');
+        filtered = source.filter(inv => inv.payment_status !== 'paid');
     } else if (historyFilter === 'paid') {
-        filtered = historyData.filter(inv => inv.payment_status === 'paid');
+        filtered = source.filter(inv => inv.payment_status === 'paid');
     }
 
-    renderHistory(filtered);
+    renderHistory(filtered, append);
     updateHistoryStats(historyData);
 }
 
-function renderHistoryPagination() {
-    let container = document.getElementById('history-pagination');
-    if (!container) {
-        const tableContainer = document.querySelector('.history-table-container');
-        if (!tableContainer) return;
-        container = document.createElement('div');
-        container.id = 'history-pagination';
-        container.className = 'pagination';
-        tableContainer.appendChild(container);
-    }
-
-    if (historyTotalPages <= 1) {
-        container.innerHTML = '';
-        return;
-    }
-
-    let html = '';
-
-    // Bouton précédent
-    html += `<button class="btn btn-sm" ${historyPage <= 1 ? 'disabled' : ''} data-page="${historyPage - 1}">← Préc.</button>`;
-
-    // Pages
-    const maxVisible = 5;
-    let startPage = Math.max(1, historyPage - Math.floor(maxVisible / 2));
-    let endPage = Math.min(historyTotalPages, startPage + maxVisible - 1);
-    if (endPage - startPage < maxVisible - 1) startPage = Math.max(1, endPage - maxVisible + 1);
-
-    if (startPage > 1) html += `<button class="btn btn-sm" data-page="1">1</button><span class="pagination-ellipsis">...</span>`;
-
-    for (let p = startPage; p <= endPage; p++) {
-        html += `<button class="btn btn-sm ${p === historyPage ? 'btn-primary' : ''}" data-page="${p}">${p}</button>`;
-    }
-
-    if (endPage < historyTotalPages) html += `<span class="pagination-ellipsis">...</span><button class="btn btn-sm" data-page="${historyTotalPages}">${historyTotalPages}</button>`;
-
-    // Bouton suivant
-    html += `<button class="btn btn-sm" ${historyPage >= historyTotalPages ? 'disabled' : ''} data-page="${historyPage + 1}">Suiv. →</button>`;
-
-    // Info total
-    html += `<span class="pagination-info">${historyTotal} facture(s)</span>`;
-
-    container.innerHTML = html;
-}
-
-function renderHistory(history) {
+function renderHistory(history, append = false) {
     const tbody = document.getElementById('history-tbody');
     const emptyState = document.getElementById('history-empty');
     const tableContainer = document.querySelector('.history-table-container');
 
-    if (!history || history.length === 0) {
+    if (!append && (!history || history.length === 0)) {
         tableContainer.classList.add('hidden');
         emptyState.classList.remove('hidden');
         return;
@@ -2183,7 +2161,7 @@ function renderHistory(history) {
     tableContainer.classList.remove('hidden');
     emptyState.classList.add('hidden');
 
-    tbody.innerHTML = history.map(inv => {
+    const html = history.map(inv => {
         const safeId = encodeURIComponent(inv.id);
         const isPaid = inv.payment_status === 'paid';
         const hasEmail = !!inv.client_email;
@@ -2292,6 +2270,12 @@ function renderHistory(history) {
             </tr>
         `;
     }).join('');
+
+    if (append) {
+        tbody.insertAdjacentHTML('beforeend', html);
+    } else {
+        tbody.innerHTML = html;
+    }
 
     // Event listeners handled by delegation (see setupHistoryDelegation)
 
@@ -3653,16 +3637,15 @@ function setupHistoryDelegation() {
         if (e.target.classList.contains('history-checkbox')) updateBulkActionsBar();
     });
 
-    // Pagination delegation (on parent container)
+    // Infinite scroll via scroll event
     const tableContainer = document.querySelector('.history-table-container');
     if (tableContainer) {
-        tableContainer.addEventListener('click', (e) => {
-            const btn = e.target.closest('[data-page]');
-            if (!btn || btn.disabled) return;
-            const page = parseInt(btn.dataset.page);
-            if (page >= 1 && page <= historyTotalPages) {
+        tableContainer.addEventListener('scroll', () => {
+            if (historyLoading || !historyHasMore) return;
+            const { scrollTop, scrollHeight, clientHeight } = tableContainer;
+            if (scrollTop + clientHeight >= scrollHeight - 200) {
                 const searchInput = document.getElementById('history-search');
-                loadHistory(searchInput ? searchInput.value : '', page);
+                loadHistory(searchInput ? searchInput.value : '', true);
             }
         });
     }
