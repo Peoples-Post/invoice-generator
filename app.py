@@ -1604,9 +1604,9 @@ def save_invoice_history(history):
         invoice_history_collection.insert_many(history)
 
 
-def add_to_invoice_history(invoice_data, batch_id):
-    """Ajoute une facture à l'historique dans MongoDB"""
-    history_entry = {
+def _build_history_entry(invoice_data, batch_id):
+    """Construit un document historique à partir des données de facture"""
+    return {
         'id': f"{batch_id}_{invoice_data['invoice_number']}",
         'invoice_number': invoice_data['invoice_number'],
         'client_name': invoice_data.get('company_name', invoice_data.get('shipper', '')),
@@ -1622,7 +1622,7 @@ def add_to_invoice_history(invoice_data, batch_id):
         'client_email': invoice_data.get('client_email', ''),
         'email_sent': invoice_data.get('email_sent', False),
         'created_at': datetime.now().isoformat(),
-        'payment_status': 'pending',  # pending, paid
+        'payment_status': 'pending',
         'reminder_1_sent': False,
         'reminder_1_at': None,
         'reminder_2_sent': False,
@@ -1635,6 +1635,11 @@ def add_to_invoice_history(invoice_data, batch_id):
         'detail_filename': invoice_data.get('detail_filename', None),
         'has_detail': invoice_data.get('has_detail', False)
     }
+
+
+def add_to_invoice_history(invoice_data, batch_id):
+    """Ajoute une facture à l'historique dans MongoDB"""
+    history_entry = _build_history_entry(invoice_data, batch_id)
     invoice_history_collection.insert_one(history_entry)
     return history_entry
 
@@ -2494,11 +2499,7 @@ def generate_invoices():
                     shipper_name, rows, client_info, invoice_number
                 )
 
-                total_ht = sum(
-                    float(row.get('Prix', '0').replace(',', '.') or '0') *
-                    int(float(row.get('Quantité', '1').replace(',', '.') or '1'))
-                    for row in rows
-                )
+                total_ht = calculate_total_ht(rows)
 
                 client_email = client_info.get('email', '')
                 if client_email == 'email@example.com':
@@ -2538,7 +2539,6 @@ def generate_invoices():
                 }
 
                 generated.append(invoice_data)
-                add_to_invoice_history(invoice_data, batch_id)
 
                 # Envoyer l'événement de progression
                 progress_data = json.dumps({
@@ -2564,6 +2564,13 @@ def generate_invoices():
         batch_data_path = os.path.join(batch_folder, BATCH_DATA_FILE)
         with open(batch_data_path, 'w', encoding='utf-8') as f:
             json.dump({'invoices': generated, 'created_at': datetime.now().isoformat()}, f, indent=2, ensure_ascii=False)
+
+        # Ajouter toutes les factures à l'historique en une seule opération
+        if generated:
+            history_entries = []
+            for invoice_data in generated:
+                history_entries.append(_build_history_entry(invoice_data, batch_id))
+            invoice_history_collection.insert_many(history_entries)
 
         # Nettoyer les fichiers uploadés temporaires
         for fid in [file_id, details_file_id]:
