@@ -150,10 +150,10 @@ def find_best_column_match(fieldnames, target_names, threshold=0.6):
 
 # Mapping des colonnes attendues vers leurs variations possibles
 COLUMN_MAPPINGS = {
-    'shipper': ['Shipper', 'ShipperName', 'SipperName', 'Sipper', 'Client', 'Expéditeur',
+    'shipper': ['Shipper', 'Shipper Name', 'ShipperName', 'SipperName', 'Sipper', 'Client', 'Expéditeur',
                 'Expediteur', 'CustomerName', 'Customer', 'Nom Client', 'NomClient',
                 'Société', 'Societe', 'Company', 'Account', 'Compte'],
-    'siret': ['SIRET', 'Siret', 'N° SIRET', 'Numero SIRET', 'NumeroSIRET', 'SIREN',
+    'siret': ['SIRET', 'SIRET NUM', 'Siret', 'N° SIRET', 'Numero SIRET', 'NumeroSIRET', 'SIREN',
               'Siret Client', 'Client SIRET', 'SIRET Client'],
     'carrier': ['Carrier name or Supplement', 'Carrier', 'Transporteur', 'CarrierName'],
     'method': ['PP Shipping method', 'Shipping method', 'Method', 'Méthode', 'Service'],
@@ -177,10 +177,13 @@ def map_csv_columns(fieldnames):
         Dict avec les noms standards comme clés et les noms réels comme valeurs
     """
     mapping = {}
+    used_fields = set()
     for standard_name, variations in COLUMN_MAPPINGS.items():
-        found = find_best_column_match(fieldnames, variations)
+        available = [f for f in fieldnames if f not in used_fields]
+        found = find_best_column_match(available, variations)
         if found:
             mapping[standard_name] = found
+            used_fields.add(found)
     return mapping
 
 

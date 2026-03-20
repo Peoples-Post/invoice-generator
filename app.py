@@ -757,11 +757,16 @@ def get_client_info(shipper_name, clients_config, csv_siret=None):
 # =============================================================================
 
 def parse_details_csv(filepath):
-    """Parse le CSV de détail et groupe les lignes par SIRET (nettoyé)."""
+    """Parse le CSV de détail et groupe les lignes par SIRET et par nom de shipper."""
     details_by_siret = defaultdict(list)
+    details_by_name = defaultdict(list)
 
-    for encoding in ['utf-8-sig', 'latin-1', 'cp1252']:
+    shipper_variations = ['shipper', 'shipper name', 'shippername', 'client', 'expéditeur', 'expediteur']
+
+    for encoding in ['utf-8-sig', 'utf-16', 'latin-1', 'cp1252']:
         try:
+            details_by_siret = defaultdict(list)
+            details_by_name = defaultdict(list)
             with open(filepath, 'r', encoding=encoding) as f:
                 sample = f.read(4096)
                 f.seek(0)
@@ -771,25 +776,46 @@ def parse_details_csv(filepath):
                 if reader.fieldnames:
                     reader.fieldnames = [n.strip().lstrip('\ufeff') for n in reader.fieldnames]
 
+                print(f">>> [PARSE_DETAIL] Encoding={encoding}, delimiter='{delimiter}', nb_colonnes={len(reader.fieldnames) if reader.fieldnames else 0}")
+
                 siret_col = None
-                siret_variations = ['siret num', 'siret', 'numero siret', 'siret number', 'n° siret', 'num siret']
+                siret_variations_list = ['siret num', 'siret', 'numero siret', 'siret number', 'n° siret', 'num siret']
                 for fieldname in (reader.fieldnames or []):
-                    if fieldname.lower().strip() in siret_variations:
+                    if fieldname.lower().strip() in siret_variations_list:
                         siret_col = fieldname
                         break
 
-                if not siret_col:
-                    break
+                shipper_col = None
+                for fieldname in (reader.fieldnames or []):
+                    if fieldname.lower().strip() in shipper_variations:
+                        shipper_col = fieldname
+                        break
+
+                if not siret_col and not shipper_col:
+                    print(f">>> [PARSE_DETAIL] Ni SIRET ni Shipper trouvé avec encoding={encoding}")
+                    continue
+
+                print(f">>> [PARSE_DETAIL] Colonne SIRET: '{siret_col}', Colonne Shipper: '{shipper_col}'")
 
                 for row in reader:
-                    clean_siret = ''.join(c for c in row.get(siret_col, '') if c.isdigit())
-                    if clean_siret:
-                        details_by_siret[clean_siret].append(dict(row))
+                    row_dict = dict(row)
+                    if siret_col:
+                        raw_siret = row.get(siret_col, '') or ''
+                        clean_siret_val = ''.join(c for c in str(raw_siret) if c.isdigit())
+                        if clean_siret_val:
+                            details_by_siret[clean_siret_val].append(row_dict)
+                    if shipper_col:
+                        raw_name = (row.get(shipper_col, '') or '').strip()
+                        if raw_name:
+                            details_by_name[raw_name].append(row_dict)
+
+                print(f">>> [PARSE_DETAIL] Résultat: {len(details_by_siret)} SIRETs, {len(details_by_name)} noms, {sum(len(v) for v in details_by_siret.values())} lignes")
             break
-        except UnicodeDecodeError:
+        except (UnicodeDecodeError, UnicodeError):
+            logger.debug(f"[parse_details_csv] Encoding {encoding} échoué, essai suivant...")
             continue
 
-    return details_by_siret
+    return details_by_siret, details_by_name
 
 
 def save_detail_csv(rows, filepath):
@@ -2272,12 +2298,16 @@ def upload_csv():
     # Sauvegarder le fichier de détail (optionnel)
     details_file_id = None
     details_file = request.files.get('details_file')
+    print(f">>> [UPLOAD] details_file reçu: {details_file}, filename: {details_file.filename if details_file else 'None'}")
     if details_file and details_file.filename and allowed_file(details_file.filename):
         details_filename = secure_filename(details_file.filename)
         details_unique = f"details_{uuid.uuid4().hex}_{details_filename}"
         details_filepath = os.path.join(app.config['UPLOAD_FOLDER'], details_unique)
         details_file.save(details_filepath)
         details_file_id = details_unique
+        print(f">>> [UPLOAD] Fichier détail sauvegardé: {details_unique}")
+    else:
+        print(f">>> [UPLOAD] PAS de fichier détail sauvegardé")
 
     try:
         # Parser le CSV
@@ -2459,11 +2489,19 @@ def generate_invoices():
         clients_config = load_clients_config()
 
         details_by_siret = {}
+        details_by_name = {}
+        print(f">>> [GENERATE] details_file_id reçu: '{details_file_id}'")
         if details_file_id:
             details_filepath = os.path.join(app.config['UPLOAD_FOLDER'], details_file_id)
-            if os.path.exists(details_filepath):
-                details_by_siret = parse_details_csv(details_filepath)
-                logger.info(f"CSV de détail chargé: {len(details_by_siret)} SIRETs trouvés")
+            file_exists = os.path.exists(details_filepath)
+            print(f">>> [GENERATE] Fichier détail: {details_filepath}, existe={file_exists}")
+            if file_exists:
+                details_by_siret, details_by_name = parse_details_csv(details_filepath)
+                print(f">>> [GENERATE] CSV de détail chargé: {len(details_by_siret)} SIRETs, {len(details_by_name)} noms")
+            else:
+                print(f">>> [GENERATE] FICHIER DÉTAIL INTROUVABLE!")
+        else:
+            print(">>> [GENERATE] PAS de details_file_id!")
     except Exception as e:
         return jsonify({'error': f'Erreur lors du traitement: {str(e)}'}), 500
 
@@ -2512,11 +2550,30 @@ def generate_invoices():
                     next_month = emission_date.replace(month=emission_date.month + 1, day=1)
                 due_date = next_month - timedelta(days=1)
 
-                detail_filename = None
+                # Matching détail: SIRET exact > nom shipper exact > nom shipper nettoyé
+                detail_rows = None
                 if cleaned_siret and cleaned_siret in details_by_siret:
+                    detail_rows = details_by_siret[cleaned_siret]
+                    print(f">>> [STREAM] {shipper_name}: match SIRET exact '{cleaned_siret}'")
+                elif shipper_name in details_by_name:
+                    detail_rows = details_by_name[shipper_name]
+                    print(f">>> [STREAM] {shipper_name}: match nom exact")
+                else:
+                    # Fallback: nom nettoyé (sans "via PP", insensible à la casse)
+                    clean_name = shipper_name.lower().replace(' via pp', '').replace(' via peoples post', '').strip()
+                    for detail_name, detail_name_rows in details_by_name.items():
+                        if detail_name.lower().strip() == clean_name:
+                            detail_rows = detail_name_rows
+                            print(f">>> [STREAM] {shipper_name}: match nom nettoyé → '{detail_name}'")
+                            break
+                    if not detail_rows:
+                        print(f">>> [STREAM] {shipper_name}: PAS de match (siret='{csv_siret}' → '{cleaned_siret}')")
+
+                detail_filename = None
+                if detail_rows:
                     detail_filename = f"detail_{invoice_number}.csv"
                     detail_csv_path = os.path.join(batch_folder, detail_filename)
-                    save_detail_csv(details_by_siret[cleaned_siret], detail_csv_path)
+                    save_detail_csv(detail_rows, detail_csv_path)
 
                 invoice_data = {
                     'shipper': shipper_name,
