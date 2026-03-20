@@ -278,7 +278,7 @@ function showPreview(data) {
 
         return `
             <div class="shipper-item">
-                <input type="checkbox" class="shipper-checkbox" data-shipper="${encodedCsvName}" checked>
+                <input type="checkbox" class="shipper-checkbox" data-shipper="${encodedCsvName}" ${isConfigured ? 'checked' : 'disabled title="Informations client incomplètes"'}>
                 <div class="shipper-info">
                     <div class="shipper-name">${escapeHtml(shipper.name)}</div>
                     <div class="shipper-details">${shipper.lines_count} lignes${shipper.client_email && shipper.client_email !== 'email@example.com' ? ' • ' + escapeHtml(shipper.client_email) : ''}</div>
