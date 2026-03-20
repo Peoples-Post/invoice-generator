@@ -3028,26 +3028,41 @@ def get_next_invoice_number():
 @app.route('/api/history', methods=['GET'])
 @login_required
 def get_invoice_history():
-    """Récupère l'historique des factures"""
-    # Paramètres de filtrage optionnels
-    search = request.args.get('search', '').lower()
-    limit = request.args.get('limit', 100, type=int)  # Limite par défaut à 100
+    """Récupère l'historique des factures avec pagination"""
+    search = request.args.get('search', '').strip()
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('per_page', 50, type=int)
+    per_page = min(per_page, 200)  # Limite max
 
-    # Charger avec limite
-    history = load_invoice_history(limit=limit if not search else 500)
-
+    query = {}
     if search:
-        history = [
-            h for h in history
-            if search in h.get('invoice_number', '').lower()
-            or search in h.get('client_name', '').lower()
-            or search in h.get('shipper', '').lower()
-        ][:limit]
+        regex = {'$regex': search, '$options': 'i'}
+        query['$or'] = [
+            {'invoice_number': regex},
+            {'client_name': regex},
+            {'shipper': regex}
+        ]
+
+    total = invoice_history_collection.count_documents(query)
+    skip = (page - 1) * per_page
+
+    history = list(
+        invoice_history_collection.find(query)
+        .sort('created_at', -1)
+        .skip(skip)
+        .limit(per_page)
+    )
+
+    for h in history:
+        h['_id'] = str(h['_id']) if '_id' in h else h.get('id')
 
     return jsonify({
         'success': True,
         'history': history,
-        'total': len(history)
+        'total': total,
+        'page': page,
+        'per_page': per_page,
+        'total_pages': (total + per_page - 1) // per_page
     })
 
 
@@ -3732,6 +3747,31 @@ def get_duplicate_clients():
         'duplicates': duplicates,
         'total_groups': len(duplicates)
     })
+
+
+@app.route('/api/clients/duplicate-keys', methods=['GET'])
+@login_required
+def get_duplicate_client_keys():
+    """Retourne uniquement les clés des clients en doublon (léger, pour le frontend)"""
+    clients = load_clients_config()
+    client_names = list(clients.keys())
+    duplicate_keys = set()
+    processed = set()
+
+    for i, name1 in enumerate(client_names):
+        if name1 in processed:
+            continue
+        for name2 in client_names[i+1:]:
+            if name2 in processed:
+                continue
+            if calculate_similarity(name1, name2) >= 0.65:
+                duplicate_keys.add(name1)
+                duplicate_keys.add(name2)
+                processed.add(name2)
+        if name1 in duplicate_keys:
+            processed.add(name1)
+
+    return jsonify({'keys': list(duplicate_keys)})
 
 
 @app.route('/api/clients/merge', methods=['POST'])
@@ -4526,21 +4566,28 @@ def get_client_dashboard():
     if not client_id:
         return jsonify({'error': 'Client non configuré'}), 400
 
-    # Récupérer les factures du client
-    invoices = list(invoice_history_collection.find({'shipper': client_id}))
-
-    # Calculer les totaux
-    total_ht = sum(inv.get('total_ht', 0) or 0 for inv in invoices)
-    total_ttc = sum(inv.get('total_ttc', 0) or 0 for inv in invoices)
-
-    # Séparer par statut de paiement
-    paid_invoices = [inv for inv in invoices if inv.get('payment_status') == 'paid']
-    pending_invoices = [inv for inv in invoices if inv.get('payment_status') != 'paid']
-
-    total_paid_ht = sum(inv.get('total_ht', 0) or 0 for inv in paid_invoices)
-    total_paid_ttc = sum(inv.get('total_ttc', 0) or 0 for inv in paid_invoices)
-    total_pending_ht = sum(inv.get('total_ht', 0) or 0 for inv in pending_invoices)
-    total_pending_ttc = sum(inv.get('total_ttc', 0) or 0 for inv in pending_invoices)
+    # Calculer les totaux en une seule requête via aggregation MongoDB
+    pipeline = [
+        {'$match': {'shipper': client_id}},
+        {'$group': {
+            '_id': None,
+            'total_invoices': {'$sum': 1},
+            'total_ht': {'$sum': {'$ifNull': ['$total_ht', 0]}},
+            'total_ttc': {'$sum': {'$ifNull': ['$total_ttc', 0]}},
+            'paid_count': {'$sum': {'$cond': [{'$eq': ['$payment_status', 'paid']}, 1, 0]}},
+            'total_paid_ht': {'$sum': {'$cond': [{'$eq': ['$payment_status', 'paid']}, {'$ifNull': ['$total_ht', 0]}, 0]}},
+            'total_paid_ttc': {'$sum': {'$cond': [{'$eq': ['$payment_status', 'paid']}, {'$ifNull': ['$total_ttc', 0]}, 0]}},
+            'total_pending_ht': {'$sum': {'$cond': [{'$ne': ['$payment_status', 'paid']}, {'$ifNull': ['$total_ht', 0]}, 0]}},
+            'total_pending_ttc': {'$sum': {'$cond': [{'$ne': ['$payment_status', 'paid']}, {'$ifNull': ['$total_ttc', 0]}, 0]}},
+        }}
+    ]
+    result = list(invoice_history_collection.aggregate(pipeline))
+    stats = result[0] if result else {
+        'total_invoices': 0, 'total_ht': 0, 'total_ttc': 0,
+        'paid_count': 0, 'total_paid_ht': 0, 'total_paid_ttc': 0,
+        'total_pending_ht': 0, 'total_pending_ttc': 0
+    }
+    pending_count = stats['total_invoices'] - stats['paid_count']
 
     # Récupérer les infos du client
     client_info = clients_collection.find_one({'_id': client_id})
@@ -4556,15 +4603,15 @@ def get_client_dashboard():
             'ville': client_info.get('ville', '') if client_info else ''
         },
         'summary': {
-            'total_invoices': len(invoices),
-            'total_ht': total_ht,
-            'total_ttc': total_ttc,
-            'total_paid_ht': total_paid_ht,
-            'total_paid_ttc': total_paid_ttc,
-            'total_pending_ht': total_pending_ht,
-            'total_pending_ttc': total_pending_ttc,
-            'paid_count': len(paid_invoices),
-            'pending_count': len(pending_invoices)
+            'total_invoices': stats['total_invoices'],
+            'total_ht': stats['total_ht'],
+            'total_ttc': stats['total_ttc'],
+            'total_paid_ht': stats['total_paid_ht'],
+            'total_paid_ttc': stats['total_paid_ttc'],
+            'total_pending_ht': stats['total_pending_ht'],
+            'total_pending_ttc': stats['total_pending_ttc'],
+            'paid_count': stats['paid_count'],
+            'pending_count': pending_count
         }
     })
 

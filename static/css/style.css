@@ -3088,3 +3088,38 @@ body.impersonating .header {
 #clients-bulk-actions-bar .btn-danger:hover {
     background-color: #dc2626;
 }
+
+/* Pagination */
+.pagination {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--spacing-xs);
+    padding: var(--spacing-md) 0;
+}
+
+.pagination .btn {
+    min-width: 36px;
+    padding: var(--spacing-xs) var(--spacing-sm);
+    font-size: 0.85rem;
+}
+
+.pagination .btn-primary {
+    pointer-events: none;
+}
+
+.pagination .btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.pagination-ellipsis {
+    padding: 0 var(--spacing-xs);
+    color: var(--color-gray-400);
+}
+
+.pagination-info {
+    margin-left: var(--spacing-md);
+    font-size: 0.85rem;
+    color: var(--color-gray-500);
+}

@@ -1071,8 +1071,13 @@ let clientsFilterValue = 'all';
 
 async function loadClients() {
     try {
-        const response = await safeFetch('/api/clients');
-        allClientsData = await response.json();
+        const [clientsRes, dupsRes] = await Promise.all([
+            safeFetch('/api/clients'),
+            safeFetch('/api/clients/duplicate-keys')
+        ]);
+        allClientsData = await clientsRes.json();
+        const dupsData = await dupsRes.json();
+        duplicateClientKeys = new Set(dupsData.keys || []);
 
         applyClientsFilter();
     } catch (error) {
@@ -1087,51 +1092,7 @@ function isClientComplete(client) {
     return hasValidSiret && hasValidEmail;
 }
 
-function normalizeClientName(name) {
-    if (!name) return '';
-    // Minuscules, sans accents, sans ponctuation, sans formes juridiques
-    let normalized = name.toLowerCase().trim();
-    normalized = normalized.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-    normalized = normalized.replace(/[^\w\s]/g, ' ');
-    // Supprimer formes juridiques
-    const legalForms = ['sarl', 'sas', 'sa', 'eurl', 'sasu', 'sci', 'snc', 'scp'];
-    legalForms.forEach(form => {
-        normalized = normalized.replace(new RegExp('\\b' + form + '\\b', 'g'), '');
-    });
-    return normalized.replace(/\s+/g, ' ').trim();
-}
-
-function calculateClientSimilarity(name1, name2) {
-    const n1 = normalizeClientName(name1);
-    const n2 = normalizeClientName(name2);
-    if (n1 === n2) return 1.0;
-    if (n1.includes(n2) || n2.includes(n1)) {
-        return Math.min(n1.length, n2.length) / Math.max(n1.length, n2.length);
-    }
-    // Mots communs
-    const words1 = new Set(n1.split(' ').filter(w => w.length > 1));
-    const words2 = new Set(n2.split(' ').filter(w => w.length > 1));
-    const common = [...words1].filter(w => words2.has(w)).length;
-    const total = new Set([...words1, ...words2]).size;
-    return total > 0 ? common / total : 0;
-}
-
 let duplicateClientKeys = new Set();
-
-function detectDuplicates() {
-    duplicateClientKeys = new Set();
-    const keys = Object.keys(allClientsData);
-
-    for (let i = 0; i < keys.length; i++) {
-        for (let j = i + 1; j < keys.length; j++) {
-            if (calculateClientSimilarity(keys[i], keys[j]) >= 0.6) {
-                duplicateClientKeys.add(keys[i]);
-                duplicateClientKeys.add(keys[j]);
-            }
-        }
-    }
-    return duplicateClientKeys.size;
-}
 
 function applyClientsFilter() {
     const searchLower = clientsSearchTerm.toLowerCase();
@@ -1168,7 +1129,7 @@ function updateClientsStats() {
     const total = Object.keys(allClientsData).length;
     const complete = Object.values(allClientsData).filter(c => isClientComplete(c)).length;
     const incomplete = total - complete;
-    const duplicates = detectDuplicates();
+    const duplicates = duplicateClientKeys.size;
 
     statsContainer.innerHTML = `
         <div class="stat-card mini clickable ${clientsFilterValue === 'all' ? 'active' : ''}" data-filter="all">
@@ -2109,16 +2070,25 @@ document.getElementById('btn-clients-bulk-delete')?.addEventListener('click', as
 
 let historyData = [];
 let historyFilter = 'all';
+let historyPage = 1;
+let historyTotalPages = 1;
+let historyTotal = 0;
+const HISTORY_PER_PAGE = 50;
 
-async function loadHistory(search = '') {
+async function loadHistory(search = '', page = 1) {
     try {
-        const url = search ? `/api/history?search=${encodeURIComponent(search)}` : '/api/history';
-        const response = await safeFetch(url);
+        const params = new URLSearchParams({ page, per_page: HISTORY_PER_PAGE });
+        if (search) params.set('search', search);
+        const response = await safeFetch(`/api/history?${params}`);
         const data = await response.json();
 
         if (data.success) {
             historyData = data.history;
+            historyPage = data.page;
+            historyTotalPages = data.total_pages;
+            historyTotal = data.total;
             applyHistoryFilter();
+            renderHistoryPagination();
         }
     } catch (error) {
         showToast('Erreur lors du chargement de l\'historique', 'error');
@@ -2136,6 +2106,50 @@ function applyHistoryFilter() {
 
     renderHistory(filtered);
     updateHistoryStats(historyData);
+}
+
+function renderHistoryPagination() {
+    let container = document.getElementById('history-pagination');
+    if (!container) {
+        const tableContainer = document.querySelector('.history-table-container');
+        if (!tableContainer) return;
+        container = document.createElement('div');
+        container.id = 'history-pagination';
+        container.className = 'pagination';
+        tableContainer.appendChild(container);
+    }
+
+    if (historyTotalPages <= 1) {
+        container.innerHTML = '';
+        return;
+    }
+
+    let html = '';
+
+    // Bouton précédent
+    html += `<button class="btn btn-sm" ${historyPage <= 1 ? 'disabled' : ''} data-page="${historyPage - 1}">← Préc.</button>`;
+
+    // Pages
+    const maxVisible = 5;
+    let startPage = Math.max(1, historyPage - Math.floor(maxVisible / 2));
+    let endPage = Math.min(historyTotalPages, startPage + maxVisible - 1);
+    if (endPage - startPage < maxVisible - 1) startPage = Math.max(1, endPage - maxVisible + 1);
+
+    if (startPage > 1) html += `<button class="btn btn-sm" data-page="1">1</button><span class="pagination-ellipsis">...</span>`;
+
+    for (let p = startPage; p <= endPage; p++) {
+        html += `<button class="btn btn-sm ${p === historyPage ? 'btn-primary' : ''}" data-page="${p}">${p}</button>`;
+    }
+
+    if (endPage < historyTotalPages) html += `<span class="pagination-ellipsis">...</span><button class="btn btn-sm" data-page="${historyTotalPages}">${historyTotalPages}</button>`;
+
+    // Bouton suivant
+    html += `<button class="btn btn-sm" ${historyPage >= historyTotalPages ? 'disabled' : ''} data-page="${historyPage + 1}">Suiv. →</button>`;
+
+    // Info total
+    html += `<span class="pagination-info">${historyTotal} facture(s)</span>`;
+
+    container.innerHTML = html;
 }
 
 function renderHistory(history) {
@@ -2275,15 +2289,17 @@ function updateHistoryStats(history) {
         return;
     }
 
-    const totalInvoices = history.length;
-    const totalTTC = history.reduce((sum, inv) => sum + (inv.total_ttc || 0), 0);
-    const paidCount = history.filter(inv => inv.payment_status === 'paid').length;
+    // Single pass pour toutes les stats
+    let paidCount = 0, unpaidTotal = 0, r1Count = 0, r2Count = 0, r3Count = 0;
+    for (const inv of history) {
+        if (inv.payment_status === 'paid') paidCount++;
+        else unpaidTotal += (inv.total_ttc || 0);
+        if (inv.reminder_1_sent) r1Count++;
+        if (inv.reminder_2_sent) r2Count++;
+        if (inv.reminder_3_sent) r3Count++;
+    }
+    const totalInvoices = historyTotal || history.length;
     const unpaidCount = totalInvoices - paidCount;
-    const unpaidTotal = history.filter(inv => inv.payment_status !== 'paid').reduce((sum, inv) => sum + (inv.total_ttc || 0), 0);
-
-    const r1Count = history.filter(inv => inv.reminder_1_sent).length;
-    const r2Count = history.filter(inv => inv.reminder_2_sent).length;
-    const r3Count = history.filter(inv => inv.reminder_3_sent).length;
 
     statsContainer.innerHTML = `
         <div class="stat-card">
@@ -3591,6 +3607,20 @@ function setupHistoryDelegation() {
     tbody.addEventListener('change', (e) => {
         if (e.target.classList.contains('history-checkbox')) updateBulkActionsBar();
     });
+
+    // Pagination delegation (on parent container)
+    const tableContainer = document.querySelector('.history-table-container');
+    if (tableContainer) {
+        tableContainer.addEventListener('click', (e) => {
+            const btn = e.target.closest('[data-page]');
+            if (!btn || btn.disabled) return;
+            const page = parseInt(btn.dataset.page);
+            if (page >= 1 && page <= historyTotalPages) {
+                const searchInput = document.getElementById('history-search');
+                loadHistory(searchInput ? searchInput.value : '', page);
+            }
+        });
+    }
 }
 setupHistoryDelegation();
 
