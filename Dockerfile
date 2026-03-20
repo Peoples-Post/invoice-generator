@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgdk-pixbuf2.0-0 \
     libcairo2 \
     libffi-dev \
+    libev-dev \
     shared-mime-info \
     && rm -rf /var/lib/apt/lists/*
 
@@ -19,5 +20,4 @@ COPY . .
 
 ENV FLASK_ENV=$FLASK_ENV
 EXPOSE $PORT
-CMD gunicorn --bind 0.0.0.0:$PORT app:app
-# Railway Settings > Deploy > Cusstom Start Command :  gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --timeout 120
+CMD gunicorn --bind 0.0.0.0:$PORT --workers 2 --worker-class gevent --timeout 300 app:app
