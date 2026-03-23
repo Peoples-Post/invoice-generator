@@ -2177,6 +2177,21 @@ async function loadHistory(search = '', append = false) {
     try {
         const params = new URLSearchParams({ page: nextPage, per_page: HISTORY_PER_PAGE });
         if (search) params.set('search', search);
+
+        // Filtres avancés
+        const siret = document.getElementById('filter-siret')?.value?.trim();
+        const company = document.getElementById('filter-company')?.value?.trim();
+        const emissionFrom = document.getElementById('filter-emission-from')?.value;
+        const emissionTo = document.getElementById('filter-emission-to')?.value;
+        const dueFrom = document.getElementById('filter-due-from')?.value;
+        const dueTo = document.getElementById('filter-due-to')?.value;
+        if (siret) params.set('siret', siret);
+        if (company) params.set('company', company);
+        if (emissionFrom) params.set('emission_from', emissionFrom);
+        if (emissionTo) params.set('emission_to', emissionTo);
+        if (dueFrom) params.set('due_from', dueFrom);
+        if (dueTo) params.set('due_to', dueTo);
+
         const response = await safeFetch(`/api/history?${params}`);
         const data = await response.json();
 
@@ -2739,6 +2754,38 @@ if (historyFilterSelect) {
     historyFilterSelect.addEventListener('change', (e) => {
         historyFilter = e.target.value;
         applyHistoryFilter();
+    });
+}
+
+// Advanced filters toggle
+const btnToggleFilters = document.getElementById('btn-toggle-filters');
+const advancedFilters = document.getElementById('history-advanced-filters');
+if (btnToggleFilters && advancedFilters) {
+    btnToggleFilters.addEventListener('click', () => {
+        advancedFilters.classList.toggle('hidden');
+        btnToggleFilters.classList.toggle('active');
+    });
+}
+
+// Apply advanced filters
+const btnApplyFilters = document.getElementById('btn-apply-filters');
+if (btnApplyFilters) {
+    btnApplyFilters.addEventListener('click', () => {
+        reloadHistory(historySearchInput ? historySearchInput.value : '');
+    });
+}
+
+// Clear advanced filters
+const btnClearFilters = document.getElementById('btn-clear-filters');
+if (btnClearFilters) {
+    btnClearFilters.addEventListener('click', () => {
+        document.getElementById('filter-siret').value = '';
+        document.getElementById('filter-company').value = '';
+        document.getElementById('filter-emission-from').value = '';
+        document.getElementById('filter-emission-to').value = '';
+        document.getElementById('filter-due-from').value = '';
+        document.getElementById('filter-due-to').value = '';
+        reloadHistory(historySearchInput ? historySearchInput.value : '');
     });
 }
 

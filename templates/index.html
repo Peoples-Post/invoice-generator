@@ -234,6 +234,12 @@
                                 <option value="pending">Impayées</option>
                                 <option value="paid">Payées</option>
                             </select>
+                            <button class="btn btn-secondary btn-sm" id="btn-toggle-filters" title="Filtres avancés">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon>
+                                </svg>
+                                Filtres
+                            </button>
                             <button class="btn btn-secondary btn-sm" id="btn-refresh-history">
                                 <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                                     <polyline points="23 4 23 10 17 10"></polyline>
@@ -251,6 +257,40 @@
                         </div>
                     </div>
                     <div class="card-body">
+                        <!-- Filtres avancés -->
+                        <div class="history-advanced-filters hidden" id="history-advanced-filters">
+                            <div class="filters-grid">
+                                <div class="filter-group">
+                                    <label for="filter-siret">SIRET</label>
+                                    <input type="text" id="filter-siret" placeholder="N° SIRET...">
+                                </div>
+                                <div class="filter-group">
+                                    <label for="filter-company">Entreprise</label>
+                                    <input type="text" id="filter-company" placeholder="Nom...">
+                                </div>
+                                <div class="filter-group">
+                                    <label for="filter-emission-from">Emission du</label>
+                                    <input type="date" id="filter-emission-from">
+                                </div>
+                                <div class="filter-group">
+                                    <label for="filter-emission-to">au</label>
+                                    <input type="date" id="filter-emission-to">
+                                </div>
+                                <div class="filter-group">
+                                    <label for="filter-due-from">Echéance du</label>
+                                    <input type="date" id="filter-due-from">
+                                </div>
+                                <div class="filter-group">
+                                    <label for="filter-due-to">au</label>
+                                    <input type="date" id="filter-due-to">
+                                </div>
+                                <div class="filter-group filter-actions">
+                                    <button class="btn btn-primary btn-sm" id="btn-apply-filters">Appliquer</button>
+                                    <button class="btn btn-secondary btn-sm" id="btn-clear-filters">Effacer</button>
+                                </div>
+                            </div>
+                        </div>
+
                         <div class="history-stats" id="history-stats"></div>
 
                         <!-- Barre d'actions multi-sélection -->

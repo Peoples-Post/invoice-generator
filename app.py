@@ -1197,6 +1197,10 @@ def init_db_indexes():
         # Index pour la détection de doublons (shipper+période et SIRET+période)
         invoice_history_collection.create_index([('shipper', 1), ('period', 1)])
         invoice_history_collection.create_index([('client_siret', 1), ('period', 1)])
+        invoice_history_collection.create_index('client_siret')
+        invoice_history_collection.create_index('client_name')
+        invoice_history_collection.create_index('emission_date')
+        invoice_history_collection.create_index('due_date')
 
         # Index sur users
         users_collection.create_index('email', unique=True)
@@ -1659,7 +1663,9 @@ def _build_history_entry(invoice_data, batch_id):
         'reminder_4_at': None,
         'client_siret': invoice_data.get('client_siret', ''),
         'detail_filename': invoice_data.get('detail_filename', None),
-        'has_detail': invoice_data.get('has_detail', False)
+        'has_detail': invoice_data.get('has_detail', False),
+        'emission_date': invoice_data.get('emission_date', ''),
+        'due_date': invoice_data.get('due_date', '')
     }
 
 
@@ -3246,14 +3252,53 @@ def get_invoice_history():
     per_page = request.args.get('per_page', 50, type=int)
     per_page = min(per_page, 200)  # Limite max
 
+    # Filtres avancés
+    filter_siret = request.args.get('siret', '').strip()
+    filter_company = request.args.get('company', '').strip()
+    filter_emission_from = request.args.get('emission_from', '').strip()
+    filter_emission_to = request.args.get('emission_to', '').strip()
+    filter_due_from = request.args.get('due_from', '').strip()
+    filter_due_to = request.args.get('due_to', '').strip()
+
     query = {}
+    conditions = []
+
     if search:
         regex = {'$regex': search, '$options': 'i'}
-        query['$or'] = [
+        conditions.append({'$or': [
             {'invoice_number': regex},
             {'client_name': regex},
             {'shipper': regex}
-        ]
+        ]})
+
+    if filter_siret:
+        conditions.append({'client_siret': {'$regex': filter_siret, '$options': 'i'}})
+
+    if filter_company:
+        company_regex = {'$regex': filter_company, '$options': 'i'}
+        conditions.append({'$or': [
+            {'client_name': company_regex},
+            {'shipper': company_regex}
+        ]})
+
+    if filter_emission_from:
+        conditions.append({'$or': [
+            {'emission_date': {'$gte': filter_emission_from}},
+            {'emission_date': {'$exists': False}, 'created_at': {'$gte': filter_emission_from}}
+        ]})
+    if filter_emission_to:
+        conditions.append({'$or': [
+            {'emission_date': {'$lte': filter_emission_to + 'T23:59:59'}},
+            {'emission_date': {'$exists': False}, 'created_at': {'$lte': filter_emission_to + 'T23:59:59'}}
+        ]})
+
+    if filter_due_from:
+        conditions.append({'due_date': {'$gte': filter_due_from}})
+    if filter_due_to:
+        conditions.append({'due_date': {'$lte': filter_due_to + 'T23:59:59'}})
+
+    if conditions:
+        query = {'$and': conditions} if len(conditions) > 1 else conditions[0]
 
     total = invoice_history_collection.count_documents(query)
     skip = (page - 1) * per_page
