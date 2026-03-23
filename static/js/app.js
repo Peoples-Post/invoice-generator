@@ -671,32 +671,24 @@ document.getElementById('btn-send-all-emails').addEventListener('click', async (
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner"></span> Envoi en cours...';
 
-    try {
-        const detailInvoices = [];
-        document.querySelectorAll('.detail-include-cb:checked').forEach(cb => {
-            const invoiceNum = cb.id.replace('detail-cb-', '');
-            detailInvoices.push(invoiceNum);
-        });
+    // Créer/afficher la barre de progression
+    let progressContainer = document.getElementById('email-send-progress');
+    if (!progressContainer) {
+        progressContainer = document.createElement('div');
+        progressContainer.id = 'email-send-progress';
+        progressContainer.innerHTML = `
+            <div class="generate-progress-bar">
+                <div class="generate-progress-fill" id="email-progress-fill"></div>
+            </div>
+            <div class="generate-progress-text" id="email-progress-text">Préparation...</div>
+        `;
+        btn.parentNode.insertBefore(progressContainer, btn);
+    }
+    progressContainer.classList.remove('hidden');
+    document.getElementById('email-progress-fill').style.width = '0%';
+    document.getElementById('email-progress-text').textContent = 'Préparation...';
 
-        const response = await safeFetch(`/api/email/send-all/${currentBatchId}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ only_pending: true, detail_invoices: detailInvoices })
-        });
-
-        const data = await response.json();
-
-        if (data.success) {
-            showEmailResults(data.results);
-            // Refresh invoices data
-            await refreshInvoicesStatus();
-        } else {
-            showToast(data.error || 'Erreur lors de l\'envoi', 'error');
-        }
-    } catch (error) {
-        showToast('Erreur lors de l\'envoi', 'error');
-    } finally {
-        releaseOp('send-emails');
+    const resetBtn = () => {
         btn.disabled = false;
         btn.innerHTML = `
             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -705,6 +697,67 @@ document.getElementById('btn-send-all-emails').addEventListener('click', async (
             </svg>
             Envoyer tous les emails
         `;
+        progressContainer.classList.add('hidden');
+    };
+
+    try {
+        const detailInvoices = [];
+        document.querySelectorAll('.detail-include-cb:checked').forEach(cb => {
+            const invoiceNum = cb.id.replace('detail-cb-', '');
+            detailInvoices.push(invoiceNum);
+        });
+
+        const response = await fetch(`/api/email/send-all/${currentBatchId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ only_pending: true, detail_invoices: detailInvoices })
+        });
+
+        if (!response.ok) {
+            const errData = await response.json();
+            throw new Error(errData.error || 'Erreur lors de l\'envoi');
+        }
+
+        // Lire le stream SSE
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n\n');
+            buffer = lines.pop();
+
+            for (const line of lines) {
+                const dataLine = line.replace(/^data: /, '').trim();
+                if (!dataLine) continue;
+
+                try {
+                    const event = JSON.parse(dataLine);
+
+                    if (event.type === 'progress') {
+                        const pct = Math.round((event.current / event.total) * 100);
+                        document.getElementById('email-progress-fill').style.width = pct + '%';
+                        const statusIcon = event.status === 'sent' ? '✓' : event.status === 'skipped' ? '–' : '✗';
+                        document.getElementById('email-progress-text').textContent =
+                            `${event.current}/${event.total} ${statusIcon} ${event.client_name}`;
+                    } else if (event.type === 'done') {
+                        showEmailResults(event.results);
+                        await refreshInvoicesStatus();
+                    }
+                } catch (e) {
+                    // Ignorer les lignes non-JSON
+                }
+            }
+        }
+    } catch (error) {
+        showToast(error.message || 'Erreur lors de l\'envoi', 'error');
+    } finally {
+        releaseOp('send-emails');
+        resetBtn();
     }
 });
 

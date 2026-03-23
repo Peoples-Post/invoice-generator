@@ -2868,98 +2868,144 @@ def send_single_email(batch_id, invoice_number):
 @optional_limit(EMAIL_LIMIT)
 @login_required
 def send_all_emails(batch_id):
-    """Envoie les emails pour toutes les factures du batch"""
+    """Envoie les emails pour toutes les factures du batch avec streaming SSE"""
     batch_folder = os.path.join(app.config['OUTPUT_FOLDER'], f"batch_{batch_id}")
     batch_data_path = os.path.join(batch_folder, BATCH_DATA_FILE)
 
     if not os.path.exists(batch_data_path):
         return jsonify({'error': 'Batch non trouvé'}), 404
 
-    # Options
+    # Options — lire AVANT le streaming (request inaccessible dans le générateur)
     req_body = request.json or {}
     only_pending = req_body.get('only_pending', True)
-    # Liste des numéros de facture pour lesquels joindre le détail
     detail_invoices = set(req_body.get('detail_invoices', []))
 
-    # Charger les données du batch
+    # Pré-charger toutes les données nécessaires
     with open(batch_data_path, 'r', encoding='utf-8') as f:
         batch_data = json.load(f)
 
-    # Charger le statut email depuis MongoDB (source de vérité)
     invoices = batch_data.get('invoices', [])
     invoice_ids = [f"{batch_id}_{inv.get('invoice_number')}" for inv in invoices]
     sent_in_db = set()
     for doc in invoice_history_collection.find({'id': {'$in': invoice_ids}, 'email_sent': True}, {'id': 1}):
         sent_in_db.add(doc['id'])
 
-    # Charger la config email
     email_config = load_email_config()
 
-    results = {
-        'total': 0,
-        'sent': 0,
-        'failed': 0,
-        'skipped': 0,
-        'details': []
-    }
+    def email_stream():
+        results = {'total': 0, 'sent': 0, 'failed': 0, 'skipped': 0, 'details': []}
+        total = len(invoices)
 
-    for i, invoice_data in enumerate(invoices):
-        results['total'] += 1
+        for i, invoice_data in enumerate(invoices):
+            results['total'] += 1
+            invoice_number = invoice_data.get('invoice_number', '')
+            client_name = invoice_data.get('company_name', invoice_data.get('shipper', ''))
 
-        # Vérifier si déjà envoyé (depuis MongoDB)
-        inv_id = f"{batch_id}_{invoice_data.get('invoice_number')}"
-        if only_pending and inv_id in sent_in_db:
-            results['skipped'] += 1
-            results['details'].append({
-                'invoice_number': invoice_data.get('invoice_number'),
-                'status': 'skipped',
-                'message': 'Déjà envoyé'
-            })
-            continue
+            # Vérifier si déjà envoyé
+            inv_id = f"{batch_id}_{invoice_number}"
+            if only_pending and inv_id in sent_in_db:
+                results['skipped'] += 1
+                results['details'].append({
+                    'invoice_number': invoice_number,
+                    'status': 'skipped',
+                    'message': 'Déjà envoyé'
+                })
+                progress = json.dumps({
+                    'type': 'progress',
+                    'current': i + 1,
+                    'total': total,
+                    'invoice_number': invoice_number,
+                    'client_name': client_name,
+                    'status': 'skipped'
+                }, ensure_ascii=False)
+                yield f"data: {progress}\n\n"
+                continue
 
-        # Vérifier si email présent
-        if not invoice_data.get('client_email'):
-            results['failed'] += 1
-            results['details'].append({
-                'invoice_number': invoice_data.get('invoice_number'),
-                'status': 'failed',
-                'message': 'Pas d\'adresse email'
-            })
-            continue
+            # Vérifier si email présent
+            if not invoice_data.get('client_email'):
+                results['failed'] += 1
+                results['details'].append({
+                    'invoice_number': invoice_number,
+                    'status': 'failed',
+                    'message': 'Pas d\'adresse email'
+                })
+                progress = json.dumps({
+                    'type': 'progress',
+                    'current': i + 1,
+                    'total': total,
+                    'invoice_number': invoice_number,
+                    'client_name': client_name,
+                    'status': 'failed',
+                    'error': 'Pas d\'adresse email'
+                }, ensure_ascii=False)
+                yield f"data: {progress}\n\n"
+                continue
 
-        # Envoyer l'email
-        include_detail = invoice_data.get('invoice_number') in detail_invoices
-        result = send_invoice_email(invoice_data, email_config, batch_folder, include_detail=include_detail)
+            # Envoyer l'email
+            include_detail = invoice_number in detail_invoices
+            result = send_invoice_email(invoice_data, email_config, batch_folder, include_detail=include_detail)
 
-        if result['success']:
-            results['sent'] += 1
-            now = datetime.now().isoformat()
-            batch_data['invoices'][i]['email_sent'] = True
-            batch_data['invoices'][i]['email_sent_at'] = now
-            results['details'].append({
-                'invoice_number': invoice_data.get('invoice_number'),
-                'status': 'sent',
-                'message': 'Envoyé avec succès'
-            })
-            # Mettre à jour l'historique MongoDB
-            invoice_id = f"{batch_id}_{invoice_data.get('invoice_number')}"
-            update_invoice_in_history(invoice_id, {
-                'email_sent': True,
-                'email_sent_at': now
-            })
-        else:
-            results['failed'] += 1
-            results['details'].append({
-                'invoice_number': invoice_data.get('invoice_number'),
-                'status': 'failed',
-                'message': result.get('error', 'Erreur inconnue')
-            })
+            if result['success']:
+                results['sent'] += 1
+                now = datetime.now().isoformat()
+                batch_data['invoices'][i]['email_sent'] = True
+                batch_data['invoices'][i]['email_sent_at'] = now
+                results['details'].append({
+                    'invoice_number': invoice_number,
+                    'status': 'sent',
+                    'message': 'Envoyé avec succès'
+                })
+                update_invoice_in_history(inv_id, {
+                    'email_sent': True,
+                    'email_sent_at': now
+                })
+                progress = json.dumps({
+                    'type': 'progress',
+                    'current': i + 1,
+                    'total': total,
+                    'invoice_number': invoice_number,
+                    'client_name': client_name,
+                    'status': 'sent'
+                }, ensure_ascii=False)
+                yield f"data: {progress}\n\n"
+            else:
+                results['failed'] += 1
+                error_msg = result.get('error', 'Erreur inconnue')
+                results['details'].append({
+                    'invoice_number': invoice_number,
+                    'status': 'failed',
+                    'message': error_msg
+                })
+                progress = json.dumps({
+                    'type': 'progress',
+                    'current': i + 1,
+                    'total': total,
+                    'invoice_number': invoice_number,
+                    'client_name': client_name,
+                    'status': 'failed',
+                    'error': error_msg
+                }, ensure_ascii=False)
+                yield f"data: {progress}\n\n"
 
-    # Sauvegarder les mises à jour
-    with open(batch_data_path, 'w', encoding='utf-8') as f:
-        json.dump(batch_data, f, indent=2, ensure_ascii=False)
+        # Sauvegarder les mises à jour du batch
+        with open(batch_data_path, 'w', encoding='utf-8') as f_out:
+            json.dump(batch_data, f_out, indent=2, ensure_ascii=False)
 
-    return jsonify({'success': True, 'results': results})
+        # Événement final
+        done_data = json.dumps({
+            'type': 'done',
+            'results': results
+        }, ensure_ascii=False)
+        yield f"data: {done_data}\n\n"
+
+    return Response(
+        stream_with_context(email_stream()),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no'
+        }
+    )
 
 
 @app.route('/api/email/status/<batch_id>', methods=['GET'])
