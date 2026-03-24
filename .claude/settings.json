@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(source /Users/marcmorandi/Documents/www/gab-invoice-generator/venv/bin/activate)",
+      "Bash(python3 -c \":*)"
+    ]
+  }
+}
