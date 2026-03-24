@@ -13,6 +13,9 @@ from collections import defaultdict
 from jinja2 import Environment, FileSystemLoader
 from weasyprint import HTML as WeasyHTML
 import argparse
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 # Configuration de l'émetteur (Peoples Post)
@@ -260,12 +263,12 @@ def parse_csv(csv_path):
         shipper_column = column_mapping.get('shipper')
 
         if not shipper_column:
-            print(f"⚠️  Colonnes détectées: {reader.fieldnames}")
-            print(f"⚠️  Aucune colonne 'Shipper' trouvée. Colonnes attendues: {COLUMN_MAPPINGS['shipper']}")
+            logger.warning(f"Colonnes détectées: {reader.fieldnames}")
+            logger.warning(f"Aucune colonne 'Shipper' trouvée. Colonnes attendues: {COLUMN_MAPPINGS['shipper']}")
             return data_by_shipper
 
-        print(f"✓ Colonne shipper détectée: '{shipper_column}'")
-        print(f"✓ Mapping des colonnes: {column_mapping}")
+        logger.debug(f"Colonne shipper détectée: '{shipper_column}'")
+        logger.debug(f"Mapping des colonnes: {column_mapping}")
 
         for row in reader:
             # Normalise la ligne avec le mapping

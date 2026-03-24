@@ -80,12 +80,12 @@ _missing_vars = [
 ]
 
 if _missing_vars:
-    print("\n" + "=" * 60)
-    print("ERREUR: Variables d'environnement manquantes !")
-    print("=" * 60)
-    print("\n".join(_missing_vars))
-    print("\nVérifiez votre fichier .env ou vos variables d'environnement.")
-    print("=" * 60 + "\n")
+    sys.stderr.write("\n" + "=" * 60 + "\n")
+    sys.stderr.write("ERREUR: Variables d'environnement manquantes !\n")
+    sys.stderr.write("=" * 60 + "\n")
+    sys.stderr.write("\n".join(_missing_vars) + "\n")
+    sys.stderr.write("\nVérifiez votre fichier .env ou vos variables d'environnement.\n")
+    sys.stderr.write("=" * 60 + "\n\n")
     sys.exit(1)
 
 # =============================================================================
@@ -124,7 +124,7 @@ if not secret_key:
         secret_key = 'dev-secret-key-for-development-only'
     else:
         secret_key = secrets.token_hex(32)
-        print("ATTENTION: SECRET_KEY non défini en production! Sessions invalides après redémarrage.")
+        sys.stderr.write("ATTENTION: SECRET_KEY non défini en production! Sessions invalides après redémarrage.\n")
 
 # Configuration
 app.config.update(
@@ -147,9 +147,9 @@ app.config.update(
 try:
     from flask_compress import Compress
     Compress(app)
-    print("Compression GZIP activée")
+    logger.info("Compression GZIP activée")
 except ImportError:
-    print("flask-compress non installé - compression désactivée")
+    logger.warning("flask-compress non installé - compression désactivée")
 
 # Cache CSV parsé en mémoire (évite de re-parser le même fichier 3 fois)
 _csv_cache = {}
@@ -234,7 +234,7 @@ def validate_mongo_uri(uri):
 
 # Valider le format de l'URI
 if not validate_mongo_uri(MONGO_URI_ENV):
-    print(f"ERREUR: MONGO_URI invalide. Doit commencer par mongodb:// ou mongodb+srv://")
+    sys.stderr.write("ERREUR: MONGO_URI invalide. Doit commencer par mongodb:// ou mongodb+srv://\n")
     sys.exit(1)
 
 MONGO_URI = MONGO_URI_ENV
@@ -650,7 +650,7 @@ def find_best_client_match(shipper_name, clients_config, threshold=0.45):
             best_info = client_info
 
     if best_match:
-        print(f"✓ Client fuzzy match: '{shipper_name}' → '{best_match}' (score: {best_score:.2f})")
+        logger.debug(f"Client fuzzy match: '{shipper_name}' → '{best_match}' (score: {best_score:.2f})")
         return best_match, best_info, best_score
 
     return None, None, 0
@@ -677,7 +677,7 @@ def get_client_info(shipper_name, clients_config, csv_siret=None):
             for client_name, client_data in clients_config.items():
                 client_siret_val = clean_siret(client_data.get('siret', ''))
                 if client_siret_val and client_siret_val == cleaned:
-                    print(f"✓ Client SIRET match: '{shipper_name}' → '{client_name}' (SIRET: {cleaned})")
+                    logger.debug(f"Client SIRET match: '{shipper_name}' → '{client_name}' (SIRET: {cleaned})")
                     return client_data
 
             # Note: pas de requête MongoDB supplémentaire, clients_config contient déjà tous les clients
@@ -715,12 +715,12 @@ def get_client_info(shipper_name, clients_config, csv_siret=None):
 
         # Match normalisé (avec et sans espaces)
         if cfg_normalized == shipper_normalized or nom_normalized == shipper_normalized:
-            print(f"✓ Client normalized match: '{shipper_name}' → '{cfg_name}'")
+            logger.debug(f"Client normalized match: '{shipper_name}' → '{cfg_name}'")
             return cfg_data
 
         # Match normalisé sans espaces
         if cfg_nospace == shipper_nospace or nom_nospace == shipper_nospace:
-            print(f"✓ Client nospace match: '{shipper_name}' → '{cfg_name}'")
+            logger.debug(f"Client nospace match: '{shipper_name}' → '{cfg_name}'")
             return cfg_data
 
         # Match par similarité (garder le meilleur)
@@ -732,7 +732,7 @@ def get_client_info(shipper_name, clients_config, csv_siret=None):
             best_fuzzy_match = cfg_data
 
     if best_fuzzy_match:
-        print(f"✓ Client fuzzy match: '{shipper_name}' (score: {best_fuzzy_score:.2f})")
+        logger.debug(f"Client fuzzy match: '{shipper_name}' (score: {best_fuzzy_score:.2f})")
         return best_fuzzy_match
 
     # Aucun match trouvé - créer une nouvelle entrée
@@ -776,7 +776,7 @@ def parse_details_csv(filepath):
                 if reader.fieldnames:
                     reader.fieldnames = [n.strip().lstrip('\ufeff') for n in reader.fieldnames]
 
-                print(f">>> [PARSE_DETAIL] Encoding={encoding}, delimiter='{delimiter}', nb_colonnes={len(reader.fieldnames) if reader.fieldnames else 0}")
+                logger.debug(f"[parse_details_csv] Encoding={encoding}, delimiter='{delimiter}', nb_colonnes={len(reader.fieldnames) if reader.fieldnames else 0}")
 
                 siret_col = None
                 siret_variations_list = ['siret num', 'siret', 'numero siret', 'siret number', 'n° siret', 'num siret']
@@ -792,10 +792,10 @@ def parse_details_csv(filepath):
                         break
 
                 if not siret_col and not shipper_col:
-                    print(f">>> [PARSE_DETAIL] Ni SIRET ni Shipper trouvé avec encoding={encoding}")
+                    logger.debug(f"[parse_details_csv] Ni SIRET ni Shipper trouvé avec encoding={encoding}")
                     continue
 
-                print(f">>> [PARSE_DETAIL] Colonne SIRET: '{siret_col}', Colonne Shipper: '{shipper_col}'")
+                logger.debug(f"[parse_details_csv] Colonne SIRET: '{siret_col}', Colonne Shipper: '{shipper_col}'")
 
                 for row in reader:
                     row_dict = dict(row)
@@ -809,7 +809,7 @@ def parse_details_csv(filepath):
                         if raw_name:
                             details_by_name[raw_name].append(row_dict)
 
-                print(f">>> [PARSE_DETAIL] Résultat: {len(details_by_siret)} SIRETs, {len(details_by_name)} noms, {sum(len(v) for v in details_by_siret.values())} lignes")
+                logger.debug(f"[parse_details_csv] Résultat: {len(details_by_siret)} SIRETs, {len(details_by_name)} noms, {sum(len(v) for v in details_by_siret.values())} lignes")
             break
         except (UnicodeDecodeError, UnicodeError):
             logger.debug(f"[parse_details_csv] Encoding {encoding} échoué, essai suivant...")
@@ -2310,16 +2310,16 @@ def upload_csv():
     # Sauvegarder le fichier de détail (optionnel)
     details_file_id = None
     details_file = request.files.get('details_file')
-    print(f">>> [UPLOAD] details_file reçu: {details_file}, filename: {details_file.filename if details_file else 'None'}")
+    logger.debug(f"[upload] details_file reçu: {details_file}, filename: {details_file.filename if details_file else 'None'}")
     if details_file and details_file.filename and allowed_file(details_file.filename):
         details_filename = secure_filename(details_file.filename)
         details_unique = f"details_{uuid.uuid4().hex}_{details_filename}"
         details_filepath = os.path.join(app.config['UPLOAD_FOLDER'], details_unique)
         details_file.save(details_filepath)
         details_file_id = details_unique
-        print(f">>> [UPLOAD] Fichier détail sauvegardé: {details_unique}")
+        logger.debug(f"[upload] Fichier détail sauvegardé: {details_unique}")
     else:
-        print(f">>> [UPLOAD] PAS de fichier détail sauvegardé")
+        logger.debug("[upload] Pas de fichier détail")
 
     try:
         # Parser le CSV
@@ -2502,18 +2502,18 @@ def generate_invoices():
 
         details_by_siret = {}
         details_by_name = {}
-        print(f">>> [GENERATE] details_file_id reçu: '{details_file_id}'")
+        logger.debug(f"[generate] details_file_id reçu: '{details_file_id}'")
         if details_file_id:
             details_filepath = os.path.join(app.config['UPLOAD_FOLDER'], details_file_id)
             file_exists = os.path.exists(details_filepath)
-            print(f">>> [GENERATE] Fichier détail: {details_filepath}, existe={file_exists}")
+            logger.debug(f"[generate] Fichier détail: {details_filepath}, existe={file_exists}")
             if file_exists:
                 details_by_siret, details_by_name = parse_details_csv(details_filepath)
-                print(f">>> [GENERATE] CSV de détail chargé: {len(details_by_siret)} SIRETs, {len(details_by_name)} noms")
+                logger.debug(f"[generate] CSV de détail chargé: {len(details_by_siret)} SIRETs, {len(details_by_name)} noms")
             else:
-                print(f">>> [GENERATE] FICHIER DÉTAIL INTROUVABLE!")
+                logger.warning(f"[generate] Fichier détail introuvable: {details_filepath}")
         else:
-            print(">>> [GENERATE] PAS de details_file_id!")
+            logger.debug("[generate] Pas de details_file_id")
     except Exception as e:
         return jsonify({'error': f'Erreur lors du traitement: {str(e)}'}), 500
 
@@ -2566,20 +2566,20 @@ def generate_invoices():
                 detail_rows = None
                 if cleaned_siret and cleaned_siret in details_by_siret:
                     detail_rows = details_by_siret[cleaned_siret]
-                    print(f">>> [STREAM] {shipper_name}: match SIRET exact '{cleaned_siret}'")
+                    logger.debug(f"[generate] {shipper_name}: match SIRET exact '{cleaned_siret}'")
                 elif shipper_name in details_by_name:
                     detail_rows = details_by_name[shipper_name]
-                    print(f">>> [STREAM] {shipper_name}: match nom exact")
+                    logger.debug(f"[generate] {shipper_name}: match nom exact")
                 else:
                     # Fallback: nom nettoyé (sans "via PP", insensible à la casse)
                     clean_name = shipper_name.lower().replace(' via pp', '').replace(' via peoples post', '').strip()
                     for detail_name, detail_name_rows in details_by_name.items():
                         if detail_name.lower().strip() == clean_name:
                             detail_rows = detail_name_rows
-                            print(f">>> [STREAM] {shipper_name}: match nom nettoyé → '{detail_name}'")
+                            logger.debug(f"[generate] {shipper_name}: match nom nettoyé → '{detail_name}'")
                             break
                     if not detail_rows:
-                        print(f">>> [STREAM] {shipper_name}: PAS de match (siret='{csv_siret}' → '{cleaned_siret}')")
+                        logger.debug(f"[generate] {shipper_name}: pas de match détail (siret='{csv_siret}' → '{cleaned_siret}')")
 
                 detail_filename = None
                 if detail_rows:
