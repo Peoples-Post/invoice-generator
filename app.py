@@ -1589,14 +1589,20 @@ def load_email_config():
     config = email_config_collection.find_one({'_id': 'main'})
     if config:
         config.pop('_id', None)
-        return config
-    # Migration: charger depuis le fichier JSON si existe
-    if os.path.exists(EMAIL_CONFIG_FILE):
+    elif os.path.exists(EMAIL_CONFIG_FILE):
+        # Migration: charger depuis le fichier JSON si existe
         with open(EMAIL_CONFIG_FILE, 'r', encoding='utf-8') as f:
             config = json.load(f)
             save_email_config(config)
-            return config
-    return {}
+    else:
+        config = {}
+
+    # Variable d'environnement prioritaire pour la clé API Brevo
+    brevo_key = os.environ.get('BREVO_API_KEY', '').strip()
+    if brevo_key:
+        config['smtp_password'] = brevo_key
+
+    return config
 
 
 def save_email_config(config):
