@@ -702,7 +702,12 @@ Veuillez trouver ci-joint votre facture..."></textarea>
 
                 <div class="debug-toolbar">
                     <button class="btn btn-primary btn-sm" id="btn-debug-refresh">Rafraîchir</button>
+                    <button class="btn btn-sm" id="btn-debug-download" disabled style="background-color: var(--color-primary); color: white;">Télécharger la sélection</button>
                     <button class="btn btn-danger btn-sm" id="btn-debug-delete" disabled>Supprimer la sélection</button>
+                    <label class="btn btn-secondary btn-sm" style="cursor: pointer; margin: 0;">
+                        Importer un ZIP
+                        <input type="file" id="debug-upload-zip" accept=".zip" style="display: none;">
+                    </label>
                     <span class="debug-stats" id="debug-stats"></span>
                 </div>
 

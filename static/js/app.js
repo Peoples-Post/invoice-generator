@@ -3653,16 +3653,25 @@ async function loadDebugFiles() {
     }
 }
 
-function updateDebugDeleteBtn() {
+function updateDebugActionBtns() {
     const selected = document.querySelectorAll('.debug-file-cb:checked');
-    const btn = document.getElementById('btn-debug-delete');
-    if (btn) {
-        btn.disabled = selected.length === 0;
-        btn.textContent = selected.length > 0
-            ? `Supprimer (${selected.length})`
-            : 'Supprimer la sélection';
+    const count = selected.length;
+
+    const btnDelete = document.getElementById('btn-debug-delete');
+    if (btnDelete) {
+        btnDelete.disabled = count === 0;
+        btnDelete.textContent = count > 0 ? `Supprimer (${count})` : 'Supprimer la sélection';
+    }
+
+    const btnDownload = document.getElementById('btn-debug-download');
+    if (btnDownload) {
+        btnDownload.disabled = count === 0;
+        btnDownload.textContent = count > 0 ? `Télécharger (${count})` : 'Télécharger la sélection';
     }
 }
+
+// Alias pour compatibilité
+const updateDebugDeleteBtn = updateDebugActionBtns;
 
 // Refresh
 document.getElementById('btn-debug-refresh')?.addEventListener('click', loadDebugFiles);
@@ -3715,6 +3724,85 @@ document.getElementById('btn-debug-delete')?.addEventListener('click', async () 
         showToast('Erreur lors de la suppression', 'error');
     } finally {
         updateDebugDeleteBtn();
+    }
+});
+
+// Download selected files as ZIP
+document.getElementById('btn-debug-download')?.addEventListener('click', async () => {
+    const selected = document.querySelectorAll('.debug-file-cb:checked');
+    if (selected.length === 0) return;
+
+    const items = [];
+    selected.forEach(cb => {
+        items.push({ folder: cb.dataset.folder, path: cb.dataset.path });
+    });
+
+    const btn = document.getElementById('btn-debug-download');
+    btn.disabled = true;
+    btn.textContent = 'Téléchargement...';
+
+    try {
+        const response = await fetch('/api/debug/files/download', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ items })
+        });
+
+        if (!response.ok) {
+            const err = await response.json();
+            throw new Error(err.error || 'Erreur téléchargement');
+        }
+
+        // Déclencher le téléchargement du ZIP
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = response.headers.get('content-disposition')?.match(/filename="?(.+)"?/)?.[1] || 'debug_export.zip';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        showToast(`${items.length} élément(s) téléchargé(s)`, 'success');
+    } catch (error) {
+        showToast(error.message || 'Erreur lors du téléchargement', 'error');
+    } finally {
+        updateDebugActionBtns();
+    }
+});
+
+// Upload ZIP to restore files
+document.getElementById('debug-upload-zip')?.addEventListener('change', async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    if (!confirm(`Importer "${file.name}" ? Les fichiers existants avec le même nom seront écrasés.`)) {
+        e.target.value = '';
+        return;
+    }
+
+    const formData = new FormData();
+    formData.append('file', file);
+
+    try {
+        const response = await safeFetch('/api/debug/files/upload', {
+            method: 'POST',
+            body: formData
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            showToast(data.message, 'success');
+            loadDebugFiles();
+        } else {
+            showToast(data.error || 'Erreur import', 'error');
+        }
+    } catch (error) {
+        showToast('Erreur lors de l\'import', 'error');
+    } finally {
+        e.target.value = '';
     }
 });
 
