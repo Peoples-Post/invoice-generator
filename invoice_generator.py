@@ -270,6 +270,7 @@ def parse_csv(csv_path):
         logger.debug(f"Colonne shipper détectée: '{shipper_column}'")
         logger.debug(f"Mapping des colonnes: {column_mapping}")
 
+        row_count = 0
         for row in reader:
             # Normalise la ligne avec le mapping
             normalized_row = normalize_row(row, column_mapping)
@@ -277,7 +278,9 @@ def parse_csv(csv_path):
             shipper = normalized_row.get('Shipper', '').strip()
             if shipper:
                 data_by_shipper[shipper].append(normalized_row)
+            row_count += 1
 
+    logger.info(f"CSV parsé: {row_count} lignes, {len(data_by_shipper)} shippers: {list(data_by_shipper.keys())}")
     return data_by_shipper
 
 

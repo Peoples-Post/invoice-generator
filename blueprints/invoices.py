@@ -50,6 +50,7 @@ def _build_shippers_summary(data_by_shipper, clients_config):
     shippers_summary = []
     for shipper_name, rows in data_by_shipper.items():
         csv_siret = rows[0].get('SIRET', '') if rows else ''
+        logger.warning(f"[summary] {shipper_name}: csv_siret='{csv_siret}', len={len(clean_siret(csv_siret))}, keys={list(rows[0].keys())[:5] if rows else []}")
         client_info = get_client_info(shipper_name, clients_config, csv_siret=csv_siret)
 
         total_ht = calculate_total_ht(rows)
@@ -87,7 +88,8 @@ def _build_shippers_summary(data_by_shipper, clients_config):
             'period': period,
             'already_invoiced': already_invoiced,
             'existing_invoice': existing_invoice,
-            'csv_siret': csv_siret
+            'csv_siret': csv_siret,
+            'csv_siret_valid': len(clean_siret(csv_siret)) == 14
         })
 
     return shippers_summary

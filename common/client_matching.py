@@ -163,24 +163,29 @@ def calculate_similarity(s1, s2):
 # =============================================================================
 
 
-def find_best_client_match(shipper_name, clients_config, threshold=0.45):
-    """Trouve le meilleur client correspondant dans la config."""
+def find_best_client_match(shipper_name, clients_config, threshold=None):
+    """Trouve le meilleur client correspondant dans la config.
+
+    Matching par nom exact, case-insensitive, ou normalisé uniquement.
+    Pas de fuzzy matching pour éviter les faux positifs.
+    """
     if not shipper_name or not clients_config:
         return None, None, 0
 
+    # 1. Match exact
     if shipper_name in clients_config:
         return shipper_name, clients_config[shipper_name], 1.0
 
+    # 2. Match case-insensitive
     shipper_lower = shipper_name.lower().strip()
     for client_name, client_info in clients_config.items():
         if client_name.lower().strip() == shipper_lower:
             return client_name, client_info, 1.0
-
-    for client_name, client_info in clients_config.items():
         client_nom = client_info.get('nom', '')
         if client_nom.lower().strip() == shipper_lower:
             return client_name, client_info, 1.0
 
+    # 3. Match normalisé (sans accents, formes juridiques, etc.)
     shipper_normalized = normalize_client_name(shipper_name)
     shipper_nospace = shipper_normalized.replace(' ', '')
 
@@ -188,10 +193,8 @@ def find_best_client_match(shipper_name, clients_config, threshold=0.45):
         client_normalized = normalize_client_name(client_name)
         client_nospace = client_normalized.replace(' ', '')
 
-        if client_normalized == shipper_normalized:
-            return client_name, client_info, 0.95
-
-        if client_nospace == shipper_nospace:
+        if client_normalized == shipper_normalized or client_nospace == shipper_nospace:
+            logger.debug(f"Client normalized match: '{shipper_name}' → '{client_name}'")
             return client_name, client_info, 0.95
 
         client_nom = client_info.get('nom', '')
@@ -199,32 +202,21 @@ def find_best_client_match(shipper_name, clients_config, threshold=0.45):
         nom_nospace = nom_normalized.replace(' ', '')
 
         if nom_normalized == shipper_normalized or nom_nospace == shipper_nospace:
+            logger.debug(f"Client normalized match (nom): '{shipper_name}' → '{client_name}'")
             return client_name, client_info, 0.95
-
-    best_match = None
-    best_score = threshold
-    best_info = None
-
-    for client_name, client_info in clients_config.items():
-        score_key = calculate_similarity(shipper_name, client_name)
-        client_nom = client_info.get('nom', '')
-        score_nom = calculate_similarity(shipper_name, client_nom) if client_nom else 0
-        score = max(score_key, score_nom)
-
-        if score > best_score:
-            best_score = score
-            best_match = client_name
-            best_info = client_info
-
-    if best_match:
-        logger.debug(f"Client fuzzy match: '{shipper_name}' → '{best_match}' (score: {best_score:.2f})")
-        return best_match, best_info, best_score
 
     return None, None, 0
 
 
 def get_client_info(shipper_name, clients_config, csv_siret=None):
-    """Récupère les informations d'un client avec matching intelligent."""
+    """Récupère les informations d'un client.
+
+    Ordre de matching :
+    1. SIRET exact (depuis le CSV)
+    2. Nom exact / case-insensitive / normalisé
+    3. Sinon → client par défaut "à configurer"
+    """
+    # 1. Match par SIRET
     if csv_siret:
         cleaned = clean_siret(csv_siret)
         if len(cleaned) >= 9:
@@ -234,49 +226,12 @@ def get_client_info(shipper_name, clients_config, csv_siret=None):
                     logger.debug(f"Client SIRET match: '{shipper_name}' → '{client_name}' (SIRET: {cleaned})")
                     return client_data
 
+    # 2. Match par nom (exact, case-insensitive, normalisé)
     matched_name, client_info, score = find_best_client_match(shipper_name, clients_config)
     if client_info:
         return client_info
 
-    shipper_lower = shipper_name.lower().strip()
-    shipper_normalized = normalize_client_name(shipper_name)
-    shipper_nospace = shipper_normalized.replace(' ', '')
-
-    best_fuzzy_match = None
-    best_fuzzy_score = 0
-
-    for cfg_name, cfg_data in clients_config.items():
-        client_nom = cfg_data.get('nom', '')
-        cfg_normalized = normalize_client_name(cfg_name)
-        nom_normalized = normalize_client_name(client_nom)
-        cfg_nospace = cfg_normalized.replace(' ', '')
-        nom_nospace = nom_normalized.replace(' ', '')
-
-        if cfg_name == shipper_name:
-            return cfg_data
-
-        if cfg_name.lower().strip() == shipper_lower or client_nom.lower().strip() == shipper_lower:
-            return cfg_data
-
-        if cfg_normalized == shipper_normalized or nom_normalized == shipper_normalized:
-            logger.debug(f"Client normalized match: '{shipper_name}' → '{cfg_name}'")
-            return cfg_data
-
-        if cfg_nospace == shipper_nospace or nom_nospace == shipper_nospace:
-            logger.debug(f"Client nospace match: '{shipper_name}' → '{cfg_name}'")
-            return cfg_data
-
-        score_key = calculate_similarity(shipper_name, cfg_name)
-        score_nom = calculate_similarity(shipper_name, client_nom) if client_nom else 0
-        best = max(score_key, score_nom)
-        if best >= 0.45 and best > best_fuzzy_score:
-            best_fuzzy_score = best
-            best_fuzzy_match = cfg_data
-
-    if best_fuzzy_match:
-        logger.debug(f"Client fuzzy match: '{shipper_name}' (score: {best_fuzzy_score:.2f})")
-        return best_fuzzy_match
-
+    # 3. Aucun match → créer un client par défaut
     default_client = {
         "nom": shipper_name,
         "adresse": "Adresse à compléter",

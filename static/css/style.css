@@ -456,6 +456,11 @@ a:hover {
     color: var(--color-gray-500);
 }
 
+.siret-warning {
+    color: #e65100;
+    font-weight: 600;
+}
+
 .shipper-status {
     display: flex;
     align-items: center;

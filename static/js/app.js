@@ -285,7 +285,7 @@ function showPreview(data) {
                 <input type="checkbox" class="shipper-checkbox" data-shipper="${encodedCsvName}" ${!isConfigured ? 'disabled title="Informations client incomplètes"' : isDuplicate ? 'title="Facture déjà générée pour cette période — cocher pour forcer"' : 'checked'}>
                 <div class="shipper-info">
                     <div class="shipper-name">${escapeHtml(shipper.name)}</div>
-                    <div class="shipper-details">${shipper.lines_count} lignes${shipper.client_email && shipper.client_email !== 'email@example.com' ? ' • ' + escapeHtml(shipper.client_email) : ''}${shipper.period ? ' • ' + escapeHtml(shipper.period) : ''}</div>
+                    <div class="shipper-details">${shipper.lines_count} lignes${shipper.client_email && shipper.client_email !== 'email@example.com' ? ' • ' + escapeHtml(shipper.client_email) : ''}${shipper.period ? ' • ' + escapeHtml(shipper.period) : ''}${!shipper.csv_siret_valid ? ' • <span class="siret-warning" title="Le SIRET dans le CSV doit contenir 14 chiffres">SIRET CSV invalide</span>' : ''}</div>
                 </div>
                 <div class="shipper-status ${statusClass}" ${!isConfigured && !isDuplicate ? `data-action="configure-client" data-shipper-key="${safeShipperName}" data-csv-siret="${escapeHtml(shipper.csv_siret || '')}"` : ''}>
                     ${statusText}
