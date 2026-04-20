@@ -160,9 +160,9 @@ def bump_invoice_counter(prefix, floor_seq):
     """Force le compteur à au moins `floor_seq` (sans jamais le décrémenter)."""
     if floor_seq is None or floor_seq < 0:
         return
-    counters_collection.find_one_and_update(
-        {'_id': f'invoice_seq_{prefix}', 'seq': {'$lt': floor_seq}},
-        {'$set': {'seq': floor_seq}},
+    counters_collection.update_one(
+        {'_id': f'invoice_seq_{prefix}'},
+        {'$max': {'seq': floor_seq}},
         upsert=True,
     )
 
