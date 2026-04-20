@@ -366,77 +366,77 @@ document.getElementById('invoice-start').addEventListener('input', updateInvoice
 
 document.getElementById('btn-generate').addEventListener('click', async () => {
     if (!guardOp('generate')) return;
-    const prefixBase = document.getElementById('invoice-prefix').value || 'PP';
-    const year = document.getElementById('invoice-year').value || new Date().getFullYear();
-    const prefix = `${prefixBase}-${year}-`;
-    const startNumber = parseInt(document.getElementById('invoice-start').value) || 1;
+    let resetBtn = () => {};
+    try {
+        const prefixBase = document.getElementById('invoice-prefix').value || 'PP';
+        const year = document.getElementById('invoice-year').value || new Date().getFullYear();
+        const prefix = `${prefixBase}-${year}-`;
+        const startNumber = parseInt(document.getElementById('invoice-start').value) || 1;
 
-    // Get selected shippers (décoder depuis base64)
-    const selectedShippers = [];
-    document.querySelectorAll('.shipper-checkbox:checked').forEach(cb => {
-        try {
-            const decoded = decodeURIComponent(cb.dataset.shipper);
-            selectedShippers.push(decoded);
-        } catch (e) {
-            // Fallback si pas encodé en base64
-            selectedShippers.push(cb.dataset.shipper);
-        }
-    });
+        // Get selected shippers (décoder depuis base64)
+        const selectedShippers = [];
+        document.querySelectorAll('.shipper-checkbox:checked').forEach(cb => {
+            try {
+                const decoded = decodeURIComponent(cb.dataset.shipper);
+                selectedShippers.push(decoded);
+            } catch (e) {
+                // Fallback si pas encodé en base64
+                selectedShippers.push(cb.dataset.shipper);
+            }
+        });
 
-    if (selectedShippers.length === 0) {
-        showToast('Veuillez sélectionner au moins un client', 'error');
-        return;
-    }
-
-    // Vérifier si des doublons sont sélectionnés
-    const selectedDuplicates = shippersData.filter(s =>
-        s.already_invoiced && selectedShippers.includes(s.csv_name || s.name)
-    );
-    if (selectedDuplicates.length > 0) {
-        const dupList = selectedDuplicates.map(s => `  • ${s.name} → ${s.existing_invoice}`).join('\n');
-        if (!confirm(`⚠️ ${selectedDuplicates.length} client(s) ont déjà une facture pour cette période :\n\n${dupList}\n\nVoulez-vous quand même générer ces factures en doublon ?`)) {
-            releaseOp('generate');
+        if (selectedShippers.length === 0) {
+            showToast('Veuillez sélectionner au moins un client', 'error');
             return;
         }
-    }
 
-    const btn = document.getElementById('btn-generate');
-    btn.disabled = true;
-    btn.innerHTML = '<span class="spinner"></span> Génération en cours...';
+        // Vérifier si des doublons sont sélectionnés
+        const selectedDuplicates = shippersData.filter(s =>
+            s.already_invoiced && selectedShippers.includes(s.csv_name || s.name)
+        );
+        if (selectedDuplicates.length > 0) {
+            const dupList = selectedDuplicates.map(s => `  • ${s.name} → ${s.existing_invoice}`).join('\n');
+            if (!confirm(`⚠️ ${selectedDuplicates.length} client(s) ont déjà une facture pour cette période :\n\n${dupList}\n\nVoulez-vous quand même générer ces factures en doublon ?`)) {
+                return;
+            }
+        }
 
-    // Afficher la barre de progression
-    let progressContainer = document.getElementById('generate-progress');
-    if (!progressContainer) {
-        progressContainer = document.createElement('div');
-        progressContainer.id = 'generate-progress';
-        progressContainer.innerHTML = `
-            <div class="generate-progress-bar">
-                <div class="generate-progress-fill" id="generate-progress-fill"></div>
-            </div>
-            <div class="generate-progress-text" id="generate-progress-text">Préparation...</div>
-        `;
-        btn.parentNode.insertBefore(progressContainer, btn);
-    }
-    progressContainer.classList.remove('hidden');
-    document.getElementById('generate-progress-fill').style.width = '0%';
-    document.getElementById('generate-progress-text').textContent = 'Préparation...';
+        const btn = document.getElementById('btn-generate');
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner"></span> Génération en cours...';
 
-    const resetBtn = () => {
-        btn.disabled = false;
-        btn.innerHTML = `
-            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                <polyline points="14 2 14 8 20 8"></polyline>
-                <line x1="16" y1="13" x2="8" y2="13"></line>
-                <line x1="16" y1="17" x2="8" y2="17"></line>
-                <polyline points="10 9 9 9 8 9"></polyline>
-            </svg>
-            Générer les factures
-        `;
-        progressContainer.classList.add('hidden');
-    };
+        // Afficher la barre de progression
+        let progressContainer = document.getElementById('generate-progress');
+        if (!progressContainer) {
+            progressContainer = document.createElement('div');
+            progressContainer.id = 'generate-progress';
+            progressContainer.innerHTML = `
+                <div class="generate-progress-bar">
+                    <div class="generate-progress-fill" id="generate-progress-fill"></div>
+                </div>
+                <div class="generate-progress-text" id="generate-progress-text">Préparation...</div>
+            `;
+            btn.parentNode.insertBefore(progressContainer, btn);
+        }
+        progressContainer.classList.remove('hidden');
+        document.getElementById('generate-progress-fill').style.width = '0%';
+        document.getElementById('generate-progress-text').textContent = 'Préparation...';
 
-    try {
+        resetBtn = () => {
+            btn.disabled = false;
+            btn.innerHTML = `
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                    <polyline points="14 2 14 8 20 8"></polyline>
+                    <line x1="16" y1="13" x2="8" y2="13"></line>
+                    <line x1="16" y1="17" x2="8" y2="17"></line>
+                    <polyline points="10 9 9 9 8 9"></polyline>
+                </svg>
+                Générer les factures
+            `;
+            progressContainer.classList.add('hidden');
+        };
+
         const response = await fetch('/api/generate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -495,7 +495,6 @@ document.getElementById('btn-generate').addEventListener('click', async () => {
                 }
             }
         }
-
     } catch (error) {
         showToast(error.message, 'error');
     } finally {

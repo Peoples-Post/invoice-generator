@@ -156,6 +156,17 @@ def reserve_invoice_numbers(prefix, count):
     return result['seq'] - count + 1
 
 
+def bump_invoice_counter(prefix, floor_seq):
+    """Force le compteur à au moins `floor_seq` (sans jamais le décrémenter)."""
+    if floor_seq is None or floor_seq < 0:
+        return
+    counters_collection.find_one_and_update(
+        {'_id': f'invoice_seq_{prefix}', 'seq': {'$lt': floor_seq}},
+        {'$set': {'seq': floor_seq}},
+        upsert=True,
+    )
+
+
 def init_invoice_counter(prefix):
     """Initialise le compteur pour un préfixe donné en se basant sur l'historique existant."""
     max_seq = 0

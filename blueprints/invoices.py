@@ -13,7 +13,7 @@ from flask_login import login_required, current_user
 from werkzeug.utils import secure_filename
 
 from common.config import DEBUG, BATCH_DATA_FILE
-from common.database import invoice_history_collection, init_invoice_counter, reserve_invoice_numbers
+from common.database import invoice_history_collection, init_invoice_counter, reserve_invoice_numbers, bump_invoice_counter
 from common.helpers import (
     allowed_file, safe_filepath, get_parsed_csv,
     calculate_total_ht, clean_siret, extract_period
@@ -193,6 +193,11 @@ def generate_invoices():
     prefix = data.get('prefix', 'PP')
     selected_shippers = data.get('shippers', [])
     details_file_id = data.get('details_file_id')
+    start_number = data.get('start_number')
+    try:
+        start_number = int(start_number) if start_number is not None else None
+    except (TypeError, ValueError):
+        start_number = None
 
     if not file_id:
         return jsonify({'error': 'Aucun fichier spécifié'}), 400
@@ -230,6 +235,8 @@ def generate_invoices():
     total_to_generate = len(shippers_to_process)
 
     init_invoice_counter(prefix)
+    if start_number is not None and start_number > 0:
+        bump_invoice_counter(prefix, start_number - 1)
     first_number = reserve_invoice_numbers(prefix, total_to_generate)
 
     # Capturer les configs pour la closure
