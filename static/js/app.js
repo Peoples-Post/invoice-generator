@@ -829,7 +829,6 @@ document.getElementById('btn-close-email-results').addEventListener('click', () 
 
 // Store original values for each form
 const formOriginalValues = {
-    smtp: {},
     sender: {},
     emailTemplates: {}
 };
@@ -900,7 +899,6 @@ function markButtonAsSaved(buttonId) {
 
     // Set the saved text based on button type
     const savedTexts = {
-        'btn-save-smtp-config': 'Enregistré',
         'btn-save-sender-config': 'Enregistré',
         'btn-save-email-config': 'Enregistré'
     };
@@ -919,7 +917,6 @@ function enableSaveButton(buttonId) {
 
     // Set the active text based on button type
     const activeTexts = {
-        'btn-save-smtp-config': 'Enregistrer SMTP',
         'btn-save-sender-config': 'Enregistrer mon identité',
         'btn-save-email-config': 'Enregistrer les templates'
     };
@@ -939,7 +936,6 @@ function updateOriginalValues(fieldIds, originalValuesKey) {
 }
 
 // Field IDs for each form
-const smtpFieldIds = ['smtp-server', 'smtp-port', 'smtp-username', 'smtp-password'];
 const senderFieldIds = ['sender-name', 'sender-email'];
 const emailTemplateFieldIds = [
     'email-subject', 'email-template',
@@ -958,23 +954,6 @@ async function loadEmailConfig() {
         const response = await safeFetch('/api/email/config');
         const config = await response.json();
 
-        // SMTP config (super admin only - fields might not exist)
-        const smtpServer = document.getElementById('smtp-server');
-        const smtpPort = document.getElementById('smtp-port');
-        const smtpUsername = document.getElementById('smtp-username');
-        const passwordHint = document.getElementById('password-hint');
-
-        if (smtpServer) smtpServer.value = config.smtp_server || '';
-        if (smtpPort) smtpPort.value = config.smtp_port || '';
-        if (smtpUsername) smtpUsername.value = config.smtp_username || '';
-        if (passwordHint) {
-            if (config.smtp_password_set) {
-                passwordHint.textContent = '✓ Mot de passe configuré (laisser vide pour conserver)';
-            } else {
-                passwordHint.textContent = '⚠ Mot de passe non configuré';
-            }
-        }
-
         // Email templates (shared config)
         document.getElementById('email-subject').value = config.email_subject || '';
         document.getElementById('email-template').value = config.email_template || '';
@@ -991,11 +970,6 @@ async function loadEmailConfig() {
 
         // Load user's sender identity
         await loadSenderConfig();
-
-        // Setup form tracking for SMTP (if fields exist)
-        if (document.getElementById('smtp-server')) {
-            setupFormTracking('smtp-config-form', smtpFieldIds, 'btn-save-smtp-config', 'smtp');
-        }
 
         // Setup form tracking for email templates
         setupFormTracking('email-templates', emailTemplateFieldIds, 'btn-save-email-config', 'emailTemplates');
@@ -1067,48 +1041,6 @@ document.getElementById('btn-save-email-config').addEventListener('click', async
         enableSaveButton('btn-save-email-config');
     }
 });
-
-// Save SMTP config (super admin only)
-const btnSaveSmtpConfig = document.getElementById('btn-save-smtp-config');
-if (btnSaveSmtpConfig) {
-    btnSaveSmtpConfig.addEventListener('click', async () => {
-        const btn = btnSaveSmtpConfig;
-        btn.disabled = true;
-        btn.classList.remove('btn-saved');
-        btn.textContent = 'Enregistrement...';
-
-        const config = {
-            smtp_server: document.getElementById('smtp-server').value,
-            smtp_port: parseInt(document.getElementById('smtp-port').value) || 587,
-            smtp_username: document.getElementById('smtp-username').value,
-            smtp_password: document.getElementById('smtp-password').value
-        };
-
-        try {
-            const response = await safeFetch('/api/email/config', {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(config)
-            });
-
-            const data = await response.json();
-
-            if (data.success) {
-                showToast('Configuration SMTP enregistrée', 'success');
-                document.getElementById('smtp-password').value = '';
-                // Update original values and mark as saved
-                updateOriginalValues(smtpFieldIds, 'smtp');
-                markButtonAsSaved('btn-save-smtp-config');
-            } else {
-                showToast(data.error || 'Erreur lors de l\'enregistrement', 'error');
-                enableSaveButton('btn-save-smtp-config');
-            }
-        } catch (error) {
-            showToast('Erreur lors de l\'enregistrement', 'error');
-            enableSaveButton('btn-save-smtp-config');
-        }
-    });
-}
 
 // Save sender identity (per-user)
 const btnSaveSenderConfig = document.getElementById('btn-save-sender-config');

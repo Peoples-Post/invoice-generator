@@ -468,37 +468,14 @@
                 {% if user.is_super_admin() %}
                 <div class="card">
                     <div class="card-header">
-                        <h2>Configuration SMTP</h2>
+                        <h2>Provider d'envoi</h2>
                     </div>
                     <div class="card-body">
-                        <form id="smtp-config-form">
-                            <div class="form-grid">
-                                <div class="form-group">
-                                    <label for="smtp-server">Serveur SMTP</label>
-                                    <input type="text" id="smtp-server" placeholder="smtp.gmail.com">
-                                </div>
-                                <div class="form-group">
-                                    <label for="smtp-port">Port</label>
-                                    <input type="number" id="smtp-port" placeholder="587">
-                                </div>
-                            </div>
-                            <div class="form-grid">
-                                <div class="form-group">
-                                    <label for="smtp-username">Identifiant SMTP</label>
-                                    <input type="text" id="smtp-username" placeholder="votre@email.com">
-                                </div>
-                                <div class="form-group">
-                                    <label for="smtp-password">Mot de passe SMTP</label>
-                                    <input type="password" id="smtp-password" placeholder="••••••••">
-                                    <small class="form-hint" id="password-hint"></small>
-                                </div>
-                            </div>
-                            <div class="form-actions">
-                                <button type="button" class="btn btn-primary" id="btn-save-smtp-config">
-                                    Enregistrer SMTP
-                                </button>
-                            </div>
-                        </form>
+                        <p style="margin: 0; color: #6B7280; font-size: 14px; line-height: 1.6;">
+                            Les emails sont envoyés via <strong>AWS SES</strong> (region <code>eu-west-1</code>).
+                            La configuration d'authentification est gérée par les variables d'environnement
+                            <code>AWS_ACCESS_KEY_ID</code>, <code>AWS_SECRET_ACCESS_KEY</code> et <code>AWS_REGION</code> définies sur Railway.
+                        </p>
                     </div>
                 </div>
                 {% endif %}
