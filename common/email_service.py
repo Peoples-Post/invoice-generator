@@ -1,5 +1,5 @@
 """
-Service d'envoi d'emails via l'API Brevo.
+Service d'envoi d'emails via AWS SES (production account).
 Inclut : config email, envoi factures/relances/bienvenue, templates HTML.
 """
 
@@ -8,13 +8,31 @@ import json
 import base64
 import secrets
 import logging
-import urllib.request
-import urllib.error
+
+import boto3
+from botocore.exceptions import BotoCoreError, ClientError
+from email.message import EmailMessage
 
 from common.config import DEBUG, EMAIL_CONFIG_FILE, LOGO_EMAIL_PATH
 from common.database import email_config_collection
 
 logger = logging.getLogger(__name__)
+
+# =============================================================================
+# Client SES (lazy init)
+# =============================================================================
+
+_ses_client = None
+
+
+def _get_ses_client():
+    """Retourne le client boto3 SES (singleton lazy)"""
+    global _ses_client
+    if _ses_client is None:
+        region = os.environ.get('AWS_REGION', 'eu-west-1')
+        _ses_client = boto3.client('ses', region_name=region)
+    return _ses_client
+
 
 # =============================================================================
 # Config email
@@ -32,10 +50,6 @@ def load_email_config():
             save_email_config(config)
     else:
         config = {}
-
-    brevo_key = os.environ.get('BREVO_API_KEY', '').strip()
-    if brevo_key:
-        config['smtp_password'] = brevo_key
 
     return config
 
@@ -73,64 +87,94 @@ def format_email_body(template, invoice_data):
 
 
 # =============================================================================
-# Envoi générique via API Brevo
+# Envoi générique via AWS SES
 # =============================================================================
 
 
-def send_email_via_api(to_email, to_name, subject, html_content, text_content=None, attachment=None, attachment_name=None):
-    """Envoie un email via l'API HTTP de Brevo"""
-    email_config = load_email_config()
+def _build_mime_message(from_addr, to_addr, subject, html_content, text_content=None, cc=None, attachments=None):
+    """Construit un message MIME prêt à envoyer via SES SendRawEmail.
 
-    api_key = email_config.get('smtp_password', '')
-    if not api_key:
-        return {'success': False, 'error': 'Clé API Brevo non configurée'}
+    attachments: liste de dicts {"filename": str, "content": bytes, "mime_type": "application/pdf"|"text/csv"|...}
+    """
+    msg = EmailMessage()
+    msg['From'] = from_addr
+    msg['To'] = to_addr
+    msg['Subject'] = subject
+    if cc:
+        msg['Cc'] = cc
+
+    if text_content:
+        msg.set_content(text_content)
+        msg.add_alternative(html_content, subtype='html')
+    else:
+        msg.set_content(html_content, subtype='html')
+
+    if attachments:
+        for att in attachments:
+            mime_type = att.get('mime_type', 'application/octet-stream')
+            maintype, subtype = mime_type.split('/', 1)
+            msg.add_attachment(
+                att['content'],
+                maintype=maintype,
+                subtype=subtype,
+                filename=att['filename'],
+            )
+
+    return msg
+
+
+def _send_raw_via_ses(from_addr, destinations, mime_msg):
+    """Envoie un message MIME via SES SendRawEmail. destinations = liste d'adresses (To + Cc)."""
+    try:
+        client = _get_ses_client()
+        response = client.send_raw_email(
+            Source=from_addr,
+            Destinations=destinations,
+            RawMessage={'Data': mime_msg.as_bytes()},
+        )
+        message_id = response.get('MessageId')
+        logger.info(f"Email envoyé via SES à {destinations}: MessageId={message_id}")
+        return {'success': True, 'message_id': message_id}
+    except ClientError as e:
+        error_msg = e.response.get('Error', {}).get('Message', str(e))
+        logger.error(f"Erreur SES ({e.response.get('Error', {}).get('Code')}): {error_msg}")
+        return {'success': False, 'error': f'Erreur SES: {error_msg}'}
+    except BotoCoreError as e:
+        logger.error(f"Erreur connexion SES: {e}")
+        return {'success': False, 'error': f'Erreur connexion SES: {str(e)}'}
+    except Exception as e:
+        logger.error(f"Erreur envoi email SES: {e}")
+        return {'success': False, 'error': str(e)}
+
+
+def send_email_via_api(to_email, to_name, subject, html_content, text_content=None, attachment=None, attachment_name=None):
+    """Envoie un email via AWS SES (nom conservé pour compat avec appelants existants)."""
+    email_config = load_email_config()
 
     sender_email = email_config.get('sender_email') or email_config.get('smtp_username', '')
     sender_name = email_config.get('sender_name', 'Peoples Post')
 
-    payload = {
-        "sender": {"name": sender_name, "email": sender_email},
-        "to": [{"email": to_email, "name": to_name or to_email}],
-        "subject": subject,
-        "htmlContent": html_content
-    }
+    if not sender_email:
+        return {'success': False, 'error': 'Adresse expéditeur non configurée'}
 
-    if text_content:
-        payload["textContent"] = text_content
+    from_addr = f'{sender_name} <{sender_email}>'
+    to_addr = f'{to_name} <{to_email}>' if to_name else to_email
 
+    attachments = None
     if attachment and attachment_name:
-        payload["attachment"] = [{
-            "name": attachment_name,
-            "content": base64.b64encode(attachment).decode('utf-8')
-        }]
+        mime_type = 'application/pdf' if attachment_name.lower().endswith('.pdf') else 'application/octet-stream'
+        attachments = [{'filename': attachment_name, 'content': attachment, 'mime_type': mime_type}]
 
-    try:
-        req = urllib.request.Request(
-            'https://api.brevo.com/v3/smtp/email',
-            data=json.dumps(payload).encode('utf-8'),
-            headers={
-                'accept': 'application/json',
-                'api-key': api_key,
-                'content-type': 'application/json'
-            },
-            method='POST'
-        )
+    mime_msg = _build_mime_message(
+        from_addr=from_addr,
+        to_addr=to_addr,
+        subject=subject,
+        html_content=html_content,
+        text_content=text_content,
+        attachments=attachments,
+    )
 
-        with urllib.request.urlopen(req, timeout=30) as response:
-            result = json.loads(response.read().decode('utf-8'))
-            logger.info(f"Email envoyé via API Brevo à {to_email}: {result}")
-            return {'success': True, 'message_id': result.get('messageId')}
-
-    except urllib.error.HTTPError as e:
-        error_body = e.read().decode('utf-8')
-        logger.error(f"Erreur API Brevo: {e.code} - {error_body}")
-        return {'success': False, 'error': f'Erreur API Brevo: {error_body}'}
-    except urllib.error.URLError as e:
-        logger.error(f"Erreur connexion API Brevo: {e}")
-        return {'success': False, 'error': f'Erreur connexion: {str(e)}'}
-    except Exception as e:
-        logger.error(f"Erreur envoi email API: {e}")
-        return {'success': False, 'error': str(e)}
+    return _send_raw_via_ses(from_addr=sender_email, destinations=[to_email], mime_msg=mime_msg)
 
 
 # =============================================================================
@@ -608,183 +652,130 @@ L'équipe Peoples Post
 # =============================================================================
 
 
-def send_invoice_email(invoice_data, email_config, batch_folder, include_detail=False):
-    """Envoie un email HTML stylisé avec la facture en pièce jointe via l'API Brevo"""
-    client_email = invoice_data.get('client_email', '')
-
-    if not client_email:
-        return {'success': False, 'error': 'Pas d\'adresse email pour ce client'}
-
+def _resolve_recipient(client_email):
+    """Applique la redirection DEV si DEBUG + DEV_RECIPIENT_EMAIL est set."""
     dev_recipient = os.environ.get('DEV_RECIPIENT_EMAIL', '')
     if DEBUG and dev_recipient:
-        recipient_email = dev_recipient
         logger.info(f"[DEV] Redirection email vers {dev_recipient} (client réel: {client_email})")
-    else:
-        recipient_email = client_email
+        return dev_recipient
+    return client_email
 
-    api_key = email_config.get('smtp_password', '')
-    if not api_key:
-        return {'success': False, 'error': 'Clé API Brevo non configurée'}
 
-    actual_sender_name = email_config.get('sender_name', 'Peoples Post')
-    actual_sender_email = os.environ.get('SENDER_INVOICE_EMAIL') or email_config.get('sender_email', '')
+def _load_pdf_and_csv_attachments(invoice_data, batch_folder, include_detail=False):
+    """Charge les pièces jointes (facture PDF + éventuellement détail CSV)."""
+    attachments = []
 
-    try:
-        subject = email_config.get('email_subject', 'Votre facture Peoples Post').format(
-            invoice_number=invoice_data.get('invoice_number', ''),
-            client_name=invoice_data.get('client_name', ''),
-            company_name=invoice_data.get('company_name', '')
-        )
+    pdf_filename = invoice_data.get('filename', '')
+    pdf_path = os.path.join(batch_folder, pdf_filename)
+    if pdf_filename and os.path.exists(pdf_path):
+        with open(pdf_path, 'rb') as f:
+            attachments.append({
+                'filename': pdf_filename or 'facture.pdf',
+                'content': f.read(),
+                'mime_type': 'application/pdf',
+            })
 
-        body_text = format_email_body(
-            email_config.get('email_template', ''),
-            invoice_data
-        )
+    if include_detail:
+        detail_filename = invoice_data.get('detail_filename', '')
+        detail_csv_path = os.path.join(batch_folder, detail_filename)
+        if detail_filename and os.path.exists(detail_csv_path):
+            with open(detail_csv_path, 'rb') as f:
+                attachments.append({
+                    'filename': detail_filename,
+                    'content': f.read(),
+                    'mime_type': 'text/csv',
+                })
 
-        body_html = create_html_email(body_text, invoice_data, 'invoice')
+    return attachments
 
-        payload = {
-            "sender": {"name": actual_sender_name, "email": actual_sender_email},
-            "to": [{"email": recipient_email, "name": invoice_data.get('company_name', recipient_email)}],
-            "cc": [{"email": "accounts@peoplespost.fr", "name": "Peoples Post Accounts" + (" debug" if DEBUG else "")}],
-            "subject": subject,
-            "htmlContent": body_html,
-            "textContent": body_text
-        }
 
-        pdf_path = os.path.join(batch_folder, invoice_data.get('filename', ''))
-        if os.path.exists(pdf_path):
-            with open(pdf_path, 'rb') as f:
-                pdf_content = f.read()
-                payload["attachment"] = [{
-                    "name": invoice_data.get('filename', 'facture.pdf'),
-                    "content": base64.b64encode(pdf_content).decode('utf-8')
-                }]
+def _send_invoice_or_reminder(invoice_data, email_config, batch_folder, *, subject, body_text, body_html, attachments, log_prefix):
+    """Coeur commun pour facture / relance : compose et envoie via SES avec CC accounts."""
+    client_email = invoice_data.get('client_email', '')
+    if not client_email:
+        return {'success': False, 'error': "Pas d'adresse email pour ce client"}
 
-        if include_detail:
-            detail_filename = invoice_data.get('detail_filename', '')
-            if detail_filename:
-                detail_csv_path = os.path.join(batch_folder, detail_filename)
-                if os.path.exists(detail_csv_path):
-                    with open(detail_csv_path, 'rb') as f:
-                        detail_content = f.read()
-                    if "attachment" not in payload:
-                        payload["attachment"] = []
-                    payload["attachment"].append({
-                        "name": detail_filename,
-                        "content": base64.b64encode(detail_content).decode('utf-8')
-                    })
+    recipient_email = _resolve_recipient(client_email)
 
-        req = urllib.request.Request(
-            'https://api.brevo.com/v3/smtp/email',
-            data=json.dumps(payload).encode('utf-8'),
-            headers={
-                'accept': 'application/json',
-                'api-key': api_key,
-                'content-type': 'application/json'
-            },
-            method='POST'
-        )
+    sender_name = email_config.get('sender_name', 'Peoples Post')
+    sender_email = os.environ.get('SENDER_INVOICE_EMAIL') or email_config.get('sender_email', '')
+    if not sender_email:
+        return {'success': False, 'error': 'Adresse expéditeur non configurée'}
 
-        with urllib.request.urlopen(req, timeout=30) as response:
-            result = json.loads(response.read().decode('utf-8'))
-            logger.info(f"Email facture envoyé via API: {invoice_data.get('invoice_number')} -> {recipient_email}")
-            return {'success': True, 'message_id': result.get('messageId')}
+    from_addr = f'{sender_name} <{sender_email}>'
+    company_name = invoice_data.get('company_name', recipient_email)
+    to_addr = f'{company_name} <{recipient_email}>'
+    cc_label = 'Peoples Post Accounts' + (' debug' if DEBUG else '')
+    cc_email = 'accounts@peoplespost.fr'
+    cc_addr = f'{cc_label} <{cc_email}>'
 
-    except urllib.error.HTTPError as e:
-        error_body = e.read().decode('utf-8')
-        logger.error(f"Erreur API Brevo facture {invoice_data.get('invoice_number')}: {e.code} - {error_body}")
-        return {'success': False, 'error': f'Erreur API Brevo: {error_body}'}
-    except urllib.error.URLError as e:
-        logger.error(f"Erreur connexion API Brevo: {e}")
-        return {'success': False, 'error': f'Erreur connexion: {str(e)}'}
-    except Exception as e:
-        logger.error(f"Erreur envoi facture {invoice_data.get('invoice_number')}: {e}")
-        return {'success': False, 'error': f'Erreur: {str(e)}'}
+    mime_msg = _build_mime_message(
+        from_addr=from_addr,
+        to_addr=to_addr,
+        subject=subject,
+        html_content=body_html,
+        text_content=body_text,
+        cc=cc_addr,
+        attachments=attachments,
+    )
+
+    result = _send_raw_via_ses(
+        from_addr=sender_email,
+        destinations=[recipient_email, cc_email],
+        mime_msg=mime_msg,
+    )
+
+    if result['success']:
+        logger.info(f"{log_prefix} {invoice_data.get('invoice_number')} -> {recipient_email}")
+    return result
+
+
+def send_invoice_email(invoice_data, email_config, batch_folder, include_detail=False):
+    """Envoie un email HTML stylisé avec la facture en pièce jointe via AWS SES"""
+    subject = email_config.get('email_subject', 'Votre facture Peoples Post').format(
+        invoice_number=invoice_data.get('invoice_number', ''),
+        client_name=invoice_data.get('client_name', ''),
+        company_name=invoice_data.get('company_name', ''),
+    )
+
+    body_text = format_email_body(email_config.get('email_template', ''), invoice_data)
+    body_html = create_html_email(body_text, invoice_data, 'invoice')
+
+    attachments = _load_pdf_and_csv_attachments(invoice_data, batch_folder, include_detail=include_detail)
+
+    return _send_invoice_or_reminder(
+        invoice_data, email_config, batch_folder,
+        subject=subject,
+        body_text=body_text,
+        body_html=body_html,
+        attachments=attachments,
+        log_prefix='Email facture envoyé via SES:',
+    )
 
 
 def send_reminder_email(invoice_data, email_config, batch_folder, reminder_type=1):
-    """Envoie un email HTML stylisé de relance avec la facture en pièce jointe via l'API Brevo"""
-    client_email = invoice_data.get('client_email', '')
+    """Envoie un email HTML stylisé de relance avec la facture en pièce jointe via AWS SES"""
+    subject_key = f'reminder_{reminder_type}_subject'
+    template_key = f'reminder_{reminder_type}_template'
 
-    if not client_email:
-        return {'success': False, 'error': 'Pas d\'adresse email pour ce client'}
+    subject_template = email_config.get(subject_key, email_config.get('reminder_1_subject', 'RELANCE - Facture {invoice_number}'))
+    subject = subject_template.format(
+        invoice_number=invoice_data.get('invoice_number', ''),
+        client_name=invoice_data.get('client_name', ''),
+        company_name=invoice_data.get('company_name', ''),
+    )
 
-    dev_recipient = os.environ.get('DEV_RECIPIENT_EMAIL', '')
-    if DEBUG and dev_recipient:
-        recipient_email = dev_recipient
-        logger.info(f"[DEV] Redirection relance vers {dev_recipient} (client réel: {client_email})")
-    else:
-        recipient_email = client_email
+    body_template = email_config.get(template_key, '') or email_config.get('email_template', '')
+    body_text = format_email_body(body_template, invoice_data)
+    body_html = create_html_email(body_text, invoice_data, f'reminder_{reminder_type}')
 
-    api_key = email_config.get('smtp_password', '')
-    if not api_key:
-        return {'success': False, 'error': 'Clé API Brevo non configurée'}
+    attachments = _load_pdf_and_csv_attachments(invoice_data, batch_folder, include_detail=False)
 
-    actual_sender_name = email_config.get('sender_name', 'Peoples Post')
-    actual_sender_email = os.environ.get('SENDER_INVOICE_EMAIL') or email_config.get('sender_email', '')
-
-    try:
-        subject_key = f'reminder_{reminder_type}_subject'
-        template_key = f'reminder_{reminder_type}_template'
-
-        subject_template = email_config.get(subject_key, email_config.get('reminder_1_subject', 'RELANCE - Facture {invoice_number}'))
-        subject = subject_template.format(
-            invoice_number=invoice_data.get('invoice_number', ''),
-            client_name=invoice_data.get('client_name', ''),
-            company_name=invoice_data.get('company_name', '')
-        )
-
-        body_template = email_config.get(template_key, '')
-        if not body_template:
-            body_template = email_config.get('email_template', '')
-
-        body_text = format_email_body(body_template, invoice_data)
-
-        email_type = f'reminder_{reminder_type}'
-        body_html = create_html_email(body_text, invoice_data, email_type)
-
-        payload = {
-            "sender": {"name": actual_sender_name, "email": actual_sender_email},
-            "to": [{"email": recipient_email, "name": invoice_data.get('company_name', recipient_email)}],
-            "cc": [{"email": "accounts@peoplespost.fr", "name": "Peoples Post Accounts" + (" debug" if DEBUG else "")}],
-            "subject": subject,
-            "htmlContent": body_html,
-            "textContent": body_text
-        }
-
-        pdf_path = os.path.join(batch_folder, invoice_data.get('filename', ''))
-        if os.path.exists(pdf_path):
-            with open(pdf_path, 'rb') as f:
-                pdf_content = f.read()
-                payload["attachment"] = [{
-                    "name": invoice_data.get('filename', 'facture.pdf'),
-                    "content": base64.b64encode(pdf_content).decode('utf-8')
-                }]
-
-        req = urllib.request.Request(
-            'https://api.brevo.com/v3/smtp/email',
-            data=json.dumps(payload).encode('utf-8'),
-            headers={
-                'accept': 'application/json',
-                'api-key': api_key,
-                'content-type': 'application/json'
-            },
-            method='POST'
-        )
-
-        with urllib.request.urlopen(req, timeout=30) as response:
-            result = json.loads(response.read().decode('utf-8'))
-            logger.info(f"Relance R{reminder_type} envoyée via API: {invoice_data.get('invoice_number')} -> {recipient_email}")
-            return {'success': True, 'message_id': result.get('messageId')}
-
-    except urllib.error.HTTPError as e:
-        error_body = e.read().decode('utf-8')
-        logger.error(f"Erreur API Brevo relance {invoice_data.get('invoice_number')}: {e.code} - {error_body}")
-        return {'success': False, 'error': f'Erreur API Brevo: {error_body}'}
-    except urllib.error.URLError as e:
-        logger.error(f"Erreur connexion API Brevo: {e}")
-        return {'success': False, 'error': f'Erreur connexion: {str(e)}'}
-    except Exception as e:
-        logger.error(f"Erreur relance {invoice_data.get('invoice_number')}: {e}")
-        return {'success': False, 'error': f'Erreur: {str(e)}'}
+    return _send_invoice_or_reminder(
+        invoice_data, email_config, batch_folder,
+        subject=subject,
+        body_text=body_text,
+        body_html=body_html,
+        attachments=attachments,
+        log_prefix=f'Relance R{reminder_type} envoyée via SES:',
+    )

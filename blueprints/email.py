@@ -30,25 +30,18 @@ email_bp = Blueprint('email', __name__)
 @email_bp.route('/api/email/config', methods=['GET'])
 @login_required
 def get_email_config():
-    """Récupère la configuration email (sans le mot de passe)"""
+    """Récupère la configuration email (sender + templates). Auth SES gérée via env vars AWS."""
     config = load_email_config()
     safe_config = {k: v for k, v in config.items() if k != 'smtp_password'}
-    safe_config['smtp_password_set'] = bool(config.get('smtp_password'))
     return jsonify(safe_config)
 
 
 @email_bp.route('/api/email/config', methods=['PUT'])
 @login_required
 def update_email_config():
-    """Met à jour la configuration email"""
+    """Met à jour la configuration email (sender + templates uniquement)"""
     data = request.json
     config = load_email_config()
-
-    smtp_fields = ['smtp_server', 'smtp_port', 'smtp_username', 'smtp_password']
-
-    smtp_modified = any(key in data for key in smtp_fields)
-    if smtp_modified and not current_user.is_super_admin():
-        return jsonify({'error': 'Seul le super admin peut modifier la configuration SMTP'}), 403
 
     for key in ['sender_email', 'sender_name', 'email_subject', 'email_template',
                 'reminder_1_subject', 'reminder_1_template',
@@ -58,17 +51,9 @@ def update_email_config():
         if key in data:
             config[key] = data[key]
 
-    if current_user.is_super_admin():
-        for key in ['smtp_server', 'smtp_port', 'smtp_username']:
-            if key in data:
-                config[key] = data[key]
-        if data.get('smtp_password'):
-            config['smtp_password'] = data['smtp_password']
-
     save_email_config(config)
 
     safe_config = {k: v for k, v in config.items() if k != 'smtp_password'}
-    safe_config['smtp_password_set'] = bool(config.get('smtp_password'))
     return jsonify({'success': True, 'config': safe_config})
 
 
@@ -80,14 +65,15 @@ def update_email_config():
 @login_required
 @super_admin_required
 def test_email():
-    """Envoie un email de test via l'API Brevo"""
+    """Envoie un email de test via AWS SES"""
     data = request.get_json() or {}
     test_email_addr = data.get('email', current_user.email)
 
     email_config = load_email_config()
 
-    if not email_config.get('smtp_password'):
-        return jsonify({'success': False, 'error': 'Clé API Brevo non configurée'}), 400
+    sender_email = email_config.get('sender_email') or email_config.get('smtp_username', '')
+    if not sender_email:
+        return jsonify({'success': False, 'error': 'Adresse expéditeur non configurée'}), 400
 
     html_content = f"""
     <html>
@@ -95,12 +81,12 @@ def test_email():
         <h2 style="color: #3026f0;">Test - Configuration Email Peoples Post</h2>
         <p>Bonjour,</p>
         <p>Ceci est un email de test envoyé depuis le Générateur de Factures Peoples Post.</p>
-        <p><strong>Si vous recevez cet email, la configuration est correcte !</strong></p>
+        <p><strong>Si vous recevez cet email, la configuration AWS SES est correcte !</strong></p>
         <hr style="border: 1px solid #eee; margin: 20px 0;">
         <p style="color: #666; font-size: 12px;">
             Configuration utilisée:<br>
-            - Serveur: {email_config.get('smtp_server')}<br>
-            - Expéditeur: {email_config.get('sender_email') or email_config.get('smtp_username')}
+            - Expéditeur: {sender_email}<br>
+            - Provider: AWS SES ({os.environ.get('AWS_REGION', 'eu-west-1')})
         </p>
         <p>Cordialement,<br>L'équipe Peoples Post</p>
     </body>
