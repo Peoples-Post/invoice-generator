@@ -6,6 +6,7 @@ import os
 import re
 import logging
 from flask import g
+from bson import ObjectId
 from pymongo import ReplaceOne
 
 from common.database import clients_collection
@@ -33,7 +34,10 @@ def load_clients_config(use_cache=True):
     clients = {}
     for client in clients_collection.find():
         client_name = client.pop('_id')
-        clients[client_name] = client
+        clients[client_name] = {
+            k: str(v) if isinstance(v, ObjectId) else v
+            for k, v in client.items()
+        }
     if not clients:
         if os.path.exists(CLIENTS_CONFIG_FILE):
             clients = load_clients_config_file()

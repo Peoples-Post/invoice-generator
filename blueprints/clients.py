@@ -650,7 +650,7 @@ def create_client_account(client_name):
 
     clients_collection.update_one(
         {'_id': client_name},
-        {'$set': {'user_id': result.inserted_id}}
+        {'$set': {'user_id': str(result.inserted_id)}}
     )
 
     data = request.get_json() or {}
